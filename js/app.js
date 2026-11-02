@@ -1010,6 +1010,14 @@ function drvProfileHtml(l){
 /* ---------- Feuilles d'action ---------- */
 function drvSheetHtml(){
  const c=CO(drvSheet.code);if(!c)return'';const k=drvSheet.k;
+ if(k==='share')return`<div class="drv-sheet-bg" data-close></div><div class="drv-sheet" role="dialog" aria-label="Partager votre position"><span class="grab"></span>
+  <div class="row" style="gap:12px"><span class="dot d-livre" style="width:44px;height:44px;border-radius:12px">${ic('pin',22)}</span><div><h3>Partager votre position ?</h3><p class="small muted" style="margin:2px 0 0">${c.code} · ${esc(c.dest.nom)} · ${esc(zoneLabel(c))}</p></div></div>
+  <p class="small" style="margin:0;line-height:1.5">Pendant cette livraison, FAST EXPRESS suit votre trajet jusqu'au client, pour que l'agence et le client voient votre arrivée. Le partage s'arrête quand vous passez hors service.</p>
+  <p class="small muted" style="margin:0">Votre téléphone va vous demander l'autorisation : touchez « Autoriser ».</p>
+  <div class="errbox" id="dsErr" hidden></div>
+  <button class="bigbtn pri" id="shareYes">${ic('pin',18)}Partager ma position et démarrer</button>
+  <button class="bigbtn" id="shareNo">Démarrer sans partager</button>
+  <button class="btn ghost" data-close style="align-self:center">Annuler</button></div>`;
  if(k==='avail'){const l=me();return`<div class="drv-sheet-bg" data-close></div><div class="drv-sheet"><span class="grab"></span><h3>Ma disponibilité</h3><div class="seg">${['disponible','hors_service'].map(x=>`<button class="${l.statut===x?'on':''}" data-av="${x}">${LST[x].l}</button>`).join('')}</div><button class="bigbtn" data-close>Fermer</button></div>`}
  if(k==='confirm')return`<div class="drv-sheet-bg" data-close></div><div class="drv-sheet" role="dialog" aria-label="Confirmer la livraison"><span class="grab"></span>
   <h3>Confirmer la livraison</h3><p class="small muted" style="margin:0">${c.code} · ${esc(c.dest.nom)}. Demandez le code à 4 chiffres reçu par le client sur WhatsApp.</p>
@@ -1035,6 +1043,18 @@ function drvSheetHtml(){
 function drvAct(fn){if(drvBusy)return;drvBusy=true;try{fn()}finally{drvBusy=false}}
 const gpsOpts=()=>GPS.last?{lat:GPS.last.coords.latitude,lng:GPS.last.coords.longitude}:{};
 function drvPick(code){drvAct(()=>{const c=myColis(code);if(!c)return;if(c.statut!=='attribue'){R.livreur();return}const l=me();setStatus(c,'recupere',null,l.nom,gpsOpts());toast(`${c.code} : colis récupéré`);waToast(c,'recupere');R.livreur()})}
+/* Demande de position à chaque début de livraison : le navigateur affiche sa propre autorisation */
+function drvShareAndStart(code,btn){
+ const l=me();if(!l)return;
+ const go=(msg,kind)=>{drvSheet=null;drvStart(code);if(msg)toast(msg,kind)};
+ if(!('geolocation' in navigator))return go('Ce téléphone ne permet pas la localisation : livraison démarrée sans position','warn');
+ btn.disabled=true;btn.innerHTML='Recherche de votre position…';
+ if(!l.consentAt){l.consentAt=Date.now();log('livreur','',`${l.nom} a accepté le partage de sa position`,l.nom);save();remote('consent',l)}
+ navigator.geolocation.getCurrentPosition(p=>{GPS.last=p;GPS.err='';GPS.lastSent=0;go('Position partagée pendant la livraison');if(gpsWanted()){gpsStart();gpsSend()}},
+  e=>{GPS.err=e.code===1?'Localisation refusée : autorisez-la dans les réglages du navigateur':'Position introuvable pour le moment';
+   go(e.code===1?'Localisation refusée : livraison démarrée sans position. Autorisez-la dans les réglages du navigateur.':'Position introuvable : livraison démarrée, nouvel essai automatique','warn')},
+  {enableHighAccuracy:true,timeout:15000,maximumAge:30000});
+}
 function drvStart(code){drvAct(()=>{const c=myColis(code);if(!c)return;if(c.statut!=='recupere'){R.livreur();return}const l=me();setStatus(c,'en_cours',null,l.nom,gpsOpts());toast(`${c.code} : livraison commencée`);waToast(c,'en_cours');R.livreur()})}
 function drvConfirm(){drvAct(()=>{
  const c=myColis(drvSheet.code);if(!c)return;const er=$('#dsErr');const l=me();
@@ -1070,7 +1090,7 @@ function drvBind(){
  const bk=root.querySelector('#dvBack');if(bk)bk.onclick=()=>{drvDetail=null;R.livreur()};
  q('[data-dtab]').forEach(b=>b.onclick=()=>{drvTab=b.dataset.dtab;drvDetail=null;drvSheet=null;R.livreur();root.querySelector('.drv-body').scrollTop=0});
  q('[data-detail]').forEach(b=>b.onclick=()=>{drvDetail=b.dataset.detail;R.livreur();root.querySelector('.drv-body').scrollTop=0});
- q('[data-start]').forEach(b=>b.onclick=()=>{b.disabled=true;drvStart(b.dataset.start)});
+ q('[data-start]').forEach(b=>b.onclick=()=>{if(!myColis(b.dataset.start))return;drvSheet={k:'share',code:b.dataset.start};R.livreur()});
  q('[data-confirm]').forEach(b=>b.onclick=()=>{if(!myColis(b.dataset.confirm))return;drvSheet={k:'confirm',code:b.dataset.confirm};drvPhoto=null;R.livreur()});
  q('[data-issue]').forEach(b=>b.onclick=()=>{if(!myColis(b.dataset.issue))return;drvSheet={k:'issue',code:b.dataset.issue,type:'reporte'};R.livreur()});
  q('[data-hf]').forEach(b=>b.onclick=()=>{drvHistF=b.dataset.hf;R.livreur()});
@@ -1081,6 +1101,8 @@ function drvBind(){
  const lo=root.querySelector('#dvLogout');if(lo)lo.onclick=()=>drvLogout(false);
  q('[data-close]').forEach(b=>b.onclick=()=>{drvSheet=null;drvPhoto=null;R.livreur()});
  if(!drvSheet)return;
+ const sy=root.querySelector('#shareYes');if(sy)sy.onclick=()=>drvShareAndStart(drvSheet.code,sy);
+ const sn=root.querySelector('#shareNo');if(sn)sn.onclick=()=>{const code=drvSheet.code;drvSheet=null;const l=me();log('livreur',code,`${l.nom} a démarré sans partager sa position`,l.nom);drvStart(code)};
  const ok=root.querySelector('#dsOk');if(ok){ok.onclick=drvConfirm;const o=$('#dsOtp');o.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();drvConfirm()}});}
  const ph=root.querySelector('#dsPhoto');if(ph)ph.onchange=async()=>{const f=ph.files[0];const er=$('#dsErr');const otp=$('#dsOtp')?.value||'',cash=$('#dsCash')?.checked;
   try{drvPhoto=await compressImage(f);R.livreur();if($('#dsOtp'))$('#dsOtp').value=otp;if($('#dsCash'))$('#dsCash').checked=!!cash}

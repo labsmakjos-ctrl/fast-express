@@ -52,7 +52,7 @@ await p.waitForTimeout(800);
 const loc=await p.evaluate(()=>__MOCKLOG.filter(x=>x.t==='driver_locations'));
 ok('Position GPS insérée dans driver_locations (colonnes réelles)',loc.length>=1&&!loc.some(x=>x.error)&&loc[0].row.driver_id==='d-1'&&Math.abs(loc[0].row.lat-0.3801)<1e-6&&'recorded_at' in loc[0].row&&'accuracy' in loc[0].row,JSON.stringify(loc[0]&&loc[0].row));
 await p.click('[data-pick="FE-26-20002"]');await p.waitForTimeout(500);
-await p.click('[data-start="FE-26-20002"]');await p.waitForTimeout(500);
+await p.click('[data-start="FE-26-20002"]');await p.waitForTimeout(200);await p.click('#shareYes');await p.waitForTimeout(800);
 await p.click('[data-confirm="FE-26-20002"]');await p.waitForTimeout(200);await p.fill('#dsOtp','2222');await p.click('#dsOk');await p.waitForTimeout(700);
 const a2=await p.evaluate(()=>({st:__MOCKDB.parcels.find(r=>r.id==='a2').status,ev:__MOCKDB.parcel_events.filter(e=>e.parcel_id==='a2').map(e=>e.status+'|'+e.author_role+'|'+(e.lat!=null))}));
 ok('Livreur : picked_up → in_transit → delivered, avec position et auteur',a2.st==='delivered'&&['picked_up|driver|true','in_transit|driver|true','delivered|driver|true'].every(s=>a2.ev.includes(s)),JSON.stringify(a2));

@@ -548,3 +548,5 @@ td .sub{display:block;color:var(--muted);font-size:12px}
 
 .map-note{position:absolute;left:12px;right:12px;bottom:28px;z-index:600;display:flex;gap:8px;align-items:flex-start;background:var(--surface);color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12.5px;box-shadow:var(--shadow)}
 .map-note .ic{color:var(--warn);flex:none;margin-top:1px}
+/* Espace livreur : les messages s'affichent en haut pour ne jamais cacher les boutons */
+.drv-mode .toasts{top:calc(66px + env(safe-area-inset-top,0px));bottom:auto}

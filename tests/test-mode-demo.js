@@ -74,7 +74,15 @@ await p.click(`[data-pick="${dc}"]`);await p.waitForTimeout(200);
 ok('Livreur : « J\'ai récupéré le colis » → Colis récupéré',await p.evaluate(c=>CO(c).statut,dc)==='recupere');
 ok('Événement avec position GPS du livreur',await p.evaluate(c=>{const h=CO(c).hist.at(-1);return Math.abs(h.lat-0.3921)<1e-6&&Math.abs(h.lng-9.4555)<1e-6},dc));
 await p.click(`[data-start="${dc}"]`);await p.waitForTimeout(200);
+ok('Commencer → demande de partage de position affichée',await p.evaluate(()=>!!document.querySelector('#shareYes')&&!!document.querySelector('#shareNo')));
+await p.screenshot({path:D+'a4b-partage.png'});
+await p.click('#shareYes');await p.waitForTimeout(800);
 ok('Livreur : « Commencer la livraison » → En cours de livraison',await p.evaluate(c=>CO(c).statut,dc)==='en_cours');
+ok('Position partagée au démarrage (événement avec coordonnées)',await p.evaluate(c=>{const h=CO(c).hist.at(-1);return h.s==='en_cours'&&Math.abs(h.lat-0.3921)<1e-6},dc));
+// démarrage sans partager
+const dc2=await p.evaluate(()=>{const L=me();const {c}=createColis({partnerId:'P1',point:{x:ZI.Louis.x,y:ZI.Louis.y},destNom:'Sans Partage',destTel:'+241 066 00 11 22',adresse:'Test',type:'standard',poids:1,cod:0});assign(c,L);setStatus(c,'recupere',null,L.nom);R.livreur();return c.code});
+await p.click(`[data-start="${dc2}"]`);await p.waitForTimeout(150);await p.click('#shareNo');await p.waitForTimeout(250);
+ok('« Démarrer sans partager » : livraison démarrée, choix enregistré',await p.evaluate(c=>CO(c).statut==='en_cours'&&S.log.some(e=>e.code===c&&/sans partager/.test(e.text)),dc2));
 await p.click(`[data-confirm="${dc}"]`);await p.waitForTimeout(150);
 await p.fill('#dsOtp',await p.evaluate(c=>CO(c).otp,dc));if(await p.$('#dsCash'))await p.check('#dsCash');await p.click('#dsOk');await p.waitForTimeout(250);
 ok('Livreur : livraison confirmée → Livré',await p.evaluate(c=>CO(c).statut,dc)==='livre');
@@ -133,6 +141,12 @@ ok('Téléphone : aucun débordement (livreur)',await mp.evaluate(()=>document.d
 await mp.evaluate(()=>logout());await mp.waitForTimeout(300);await mp.click('[data-u="manager@fastexpress.demo"]');await mp.click('#lgGo');await mp.waitForTimeout(500);
 for(const v of ['tableau','colis','carte','attribution']){await mp.evaluate(v=>location.hash=v,v);await mp.waitForTimeout(300);const ov=await mp.evaluate(()=>document.documentElement.scrollWidth-innerWidth);if(ov>0)ok('Téléphone : débordement '+v,false,ov)}
 ok('Téléphone : vues manager sans débordement',true);
+const dn=await b.newContext({viewport:{width:393,height:851},isMobile:true});const dp=await dn.newPage();
+dp.on('pageerror',e=>errs.push('refus: '+e.message));
+await dp.goto(URL);await dp.waitForTimeout(500);await dp.click('[data-u="prisca.mba@fastexpress.demo"]');await dp.click('#lgGo');await dp.waitForTimeout(500);
+const dc3=await dp.evaluate(()=>{const L=me();const {c}=createColis({partnerId:'P1',point:{x:ZI.Glass.x,y:ZI.Glass.y},destNom:'Refus GPS',destTel:'+241 066 00 33 44',adresse:'Test',type:'standard',poids:1,cod:0});assign(c,L);setStatus(c,'recupere',null,L.nom);R.livreur();return c.code});
+await dp.click(`[data-start="${dc3}"]`);await dp.waitForTimeout(150);await dp.click('#shareYes');await dp.waitForTimeout(1500);
+ok('Autorisation refusée par le téléphone : livraison démarrée quand même, message clair',await dp.evaluate(c=>CO(c).statut==='en_cours',dc3)&&await dp.evaluate(()=>[...document.querySelectorAll('.toast')].some(t=>/refusée|introuvable/.test(t.textContent))));
 ok('Aucune erreur JavaScript',errs.length===0,errs.join(' | '));
 console.log(`\n${pass} réussis, ${fail} échoués`);
 await b.close();
