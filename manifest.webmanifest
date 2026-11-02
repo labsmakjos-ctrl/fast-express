@@ -1,0 +1,9 @@
+{
+  "name": "FAST EXPRESS",
+  "short_name": "FAST EXPRESS",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#06281b",
+  "theme_color": "#06281b",
+  "icons": [{ "src": "assets/logo.png", "sizes": "175x140", "type": "image/png" }]
+}

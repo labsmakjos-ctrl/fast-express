@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#06281b">
+<title>FAST EXPRESS</title>
+<link rel="icon" href="assets/logo.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<div class="login" id="login" hidden></div>
+<div class="app">
+  <aside class="rail" id="rail">
+    <div class="brand">
+      <span class="brandlogo" data-logo="72"></span>
+      <div><b>FAST EXPRESS</b><small>Libreville · Gabon</small></div>
+    </div>
+    <nav class="nav" id="nav"></nav>
+    <div class="rail-foot">
+      <label class="sim"><span><i class="pulse" id="simDot"></i>Activité en direct</span><span class="switch"><input type="checkbox" id="simToggle" aria-label="Activer la simulation en direct"><i></i></span></label>
+      <button class="rail-btn" id="resetBtn" type="button"></button>
+      <div class="user" id="userBox"></div>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+  <main class="main">
+    <header class="top">
+      <button class="burger" id="burger" type="button" aria-label="Ouvrir le menu"></button>
+      <span class="brandlogo top-logo" data-logo="34"></span><div class="top-t"><h1 id="pgTitle">Tableau de bord</h1><p id="pgSub"></p></div>
+      <div class="top-a">
+        <div class="gsearch"><span id="gsIc"></span><input id="gsearch" placeholder="Rechercher un n° de suivi…" aria-label="Rechercher un colis"></div>
+        <button class="btn pri" id="newBtn" type="button"></button>
+      </div>
+    </header>
+    <section class="view" id="view"></section>
+  </main>
+</div>
+<div class="drv" id="drv" hidden></div>
+<div class="overlay" id="overlay"></div>
+<aside class="drawer" id="drawer" aria-label="Détail du colis"></aside>
+<div class="modal" id="modal" role="dialog" aria-modal="true"></div>
+<div class="toasts" id="toasts"></div>
+
+<!-- 1. Configuration (mode démo ou Supabase) -->
+<script src="js/config.js"></script>
+<!-- 2. Bibliothèques incluses dans le projet : Supabase 2.45.4 (client officiel) et Leaflet 1.9.4 (carte OpenStreetMap) -->
+<script src="vendor/supabase.js"></script>
+<script src="vendor/leaflet/leaflet.js"></script>
+<!-- 3. Accès aux données Supabase, puis l'application -->
+<script src="js/supabase-data.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
