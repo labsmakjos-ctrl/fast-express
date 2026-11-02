@@ -40,6 +40,10 @@ window.FE_CONFIG = {
   // Décision 4 : capacité provisoire selon le type de véhicule
   capacities: { moto: 5, scooter: 4, voiture: 8, velo: 3 },
 
+  // Fond de carte : null = automatique (bascule entre plusieurs fournisseurs),
+  // ou 'osm', 'carto', 'esri' pour en imposer un en premier.
+  mapTiles: null,
+
   // Envoi de la position GPS des livreurs (millisecondes)
   gpsIntervalMs: 120000,
 

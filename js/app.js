@@ -785,14 +785,39 @@ R.livreurs=()=>{
 let mapSel=null,mapLayers={l:true,d:true,z:false},raf=null,LM=null,LMK={},MAPV=null;
 const ACT_COL={en_attente:'#8a9893',attribue:'#1d5ea8',recupere:'#0c6c49',en_cours:'#d99a02'};
 const llOf=p=>{const g=toLL(p.x,p.y);return[g.lat,g.lng]};
+/* Fonds de carte réels. OpenStreetMap exige l'adresse de la page (en-tête Referer) : il refuse les pages
+   ouvertes par double-clic (file://). On essaie donc plusieurs fournisseurs et on bascule automatiquement
+   vers le suivant si les images ne se chargent pas. Vue « Satellite » disponible en plus. */
+const TILES={
+ osm:{n:'Plan OpenStreetMap',u:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',o:{maxZoom:19,attribution:'© les contributeurs d\'OpenStreetMap'}},
+ carto:{n:'Plan CARTO',u:'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',o:{maxZoom:20,subdomains:'abcd',attribution:'© OpenStreetMap © CARTO'}},
+ esri:{n:'Plan Esri',u:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',o:{maxZoom:19,attribution:'Fond © Esri, HERE, Garmin, © OpenStreetMap'}},
+ sat:{n:'Satellite',u:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',o:{maxZoom:19,attribution:'Imagerie © Esri, Maxar, Earthstar Geographics'}}};
+let tileOrder=null,tileIdx=0,mapSat=false;
+function tileChain(){
+ if(tileOrder)return tileOrder;
+ const pref=CFG.mapTiles&&TILES[CFG.mapTiles]?[CFG.mapTiles]:[];
+ const web=location.protocol==='http:'||location.protocol==='https:';
+ tileOrder=[...new Set([...pref,...(web?['osm','carto','esri']:['carto','esri','osm'])])];return tileOrder}
+function mountTiles(map){
+ if(map._feTiles){map.removeLayer(map._feTiles);map._feTiles=null}
+ const key=mapSat?'sat':tileChain()[tileIdx];const T=TILES[key];if(!T)return;
+ let ok=0,ko=0;
+ const layer=L.tileLayer(T.u,T.o).on('tileload',()=>{ok++;const n=document.getElementById('mapNote');if(n)n.hidden=true})
+  .on('tileerror',()=>{ko++;if(ok||ko<4)return;
+   if(!mapSat&&tileIdx<tileChain().length-1){tileIdx++;console.warn('[FAST EXPRESS] fond de carte indisponible, bascule vers',tileChain()[tileIdx]);mountTiles(map);return}
+   const n=document.getElementById('mapNote');if(n)n.hidden=false});
+ layer.addTo(map);layer.bringToBack();map._feTiles=layer;
+ const b=document.getElementById('mapSat');if(b){b.classList.toggle('on',mapSat);b.textContent=mapSat?'Satellite':'Plan';b.title=mapSat?'Revenir au plan':'Passer en vue satellite'}
+}
 R.carte=()=>{
  const live=S.livreurs.filter(onDuty);
  $('#view').innerHTML=`
  <div class="grid mapgrid">
   <div class="map" id="map">
    <div id="lmap" class="lmap" role="region" aria-label="Carte de Libreville"></div>
-   <div class="map-tools">${[['l','Livreurs'],['d','Destinations'],['z','Quartiers']].map(([k,t])=>`<button class="chip ${mapLayers[k]?'on':''}" data-ly="${k}">${t}</button>`).join('')}</div>
-   <div class="map-note" id="mapNote" hidden>${ic('alert',16)}<span><b>Fond de carte bloqué sur cette page.</b> Les rues de Libreville (OpenStreetMap) s'affichent dans la version installée sur votre ordinateur ou en ligne sur votre propre adresse https. Les livreurs et les colis restent placés à leur position réelle.</span></div>
+   <div class="map-tools">${[['l','Livreurs'],['d','Destinations'],['z','Quartiers']].map(([k,t])=>`<button class="chip ${mapLayers[k]?'on':''}" data-ly="${k}">${t}</button>`).join('')}<button class="chip" id="mapSat" type="button">Plan</button></div>
+   <div class="map-note" id="mapNote" hidden>${ic('alert',16)}<span><b>Fond de carte indisponible.</b> Vérifiez la connexion Internet. Sur le lien claude.ai, les fonds de carte sont bloqués par la plateforme : ouvrez le fichier FAST-EXPRESS.html ou votre adresse https. Les livreurs et les colis restent placés à leur position réelle.</span></div>
    ${window.L?'':`<div class="map-off">${ic('alert',22)}<b>Carte indisponible</b><span class="small">La carte OpenStreetMap a besoin d'une connexion Internet.</span></div>`}
   </div>
   <div class="stack">
@@ -803,13 +828,11 @@ R.carte=()=>{
   </div>
  </div>`;
  document.querySelectorAll('[data-ly]').forEach(b=>b.onclick=()=>{mapLayers[b.dataset.ly]=!mapLayers[b.dataset.ly];b.classList.toggle('on',mapLayers[b.dataset.ly]);mapDraw()});
+ $('#mapSat').onclick=()=>{mapSat=!mapSat;if(LM)mountTiles(LM)};
  if(window.L){
   if(LM){try{LM.remove()}catch(e){}}
   LM=L.map('lmap',{zoomControl:true,attributionControl:true});
-  let tileFail=0,tileOk=0;
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© les contributeurs d\'OpenStreetMap'})
-   .on('tileload',()=>{tileOk++;const n=document.getElementById('mapNote');if(n)n.hidden=true})
-   .on('tileerror',()=>{tileFail++;const n=document.getElementById('mapNote');if(n&&!tileOk&&tileFail>=3)n.hidden=false}).addTo(LM);
+  mountTiles(LM);
   if(MAPV)LM.setView(MAPV.c,MAPV.z);else LM.fitBounds(L.latLngBounds(ZONES.map(z=>[z.lat,z.lng])).pad(.05));
   LM.on('moveend',()=>{MAPV={c:LM.getCenter(),z:LM.getZoom()}});
   LM._fe=L.layerGroup().addTo(LM);
