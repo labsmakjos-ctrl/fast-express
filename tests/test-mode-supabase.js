@@ -64,6 +64,9 @@ await p.evaluate(c=>{drvDetail=c;R.livreur()},two[0]);await p.click(`[data-issue
 await p.evaluate(c=>{drvDetail=c;R.livreur()},two[1]);await p.click(`[data-issue="${two[1]}"]`);await p.waitForTimeout(150);await p.selectOption('#dsMotif',{index:1});await p.click('#dsIssue');await p.waitForTimeout(600);
 const ee=await p.evaluate(t=>t.map(c=>{const r=__MOCKDB.parcels.find(x=>x.tracking_number===c);const ev=__MOCKDB.parcel_events.filter(e=>e.parcel_id===r.id).at(-1);return{status:r.status,date:r.postponed_date,reason:ev.reason}}),two);
 ok('Échec : status postponed, postponed_date vide, raison « Échec : … »',ee[0].status==='postponed'&&ee[0].date===null&&/^Échec : /.test(ee[0].reason),JSON.stringify(ee[0]));
+const rs=await p.evaluate(t=>t.map(c=>{const r=__MOCKDB.parcels.find(x=>x.tracking_number===c);return{pr:r.postponed_reason}}),two);
+ok('Motifs écrits dans postponed_reason (échec et report)',/^Échec : /.test(rs[0].pr)&&!!rs[1].pr&&!/^Échec/.test(rs[1].pr),JSON.stringify(rs));
+ok('Date de livraison écrite dans delivered_at',await p.evaluate(()=>!!__MOCKDB.parcels.find(r=>r.id==='a2').delivered_at));
 ok('Report : status postponed avec postponed_date',ee[1].status==='postponed'&&!!ee[1].date&&Date.parse(ee[1].date)>Date.now(),JSON.stringify(ee[1]));
 // hors service
 await p.evaluate(()=>{drvDetail=null;drvTab='profil';R.livreur()});await p.click('[data-av="hors_service"]');await p.waitForTimeout(500);

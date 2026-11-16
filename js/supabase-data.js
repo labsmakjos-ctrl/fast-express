@@ -9,7 +9,7 @@
                       battery_level, is_charging, recorded_at, created_at)
      parcels(id, tracking_number, tracking_token, confirmation_code,
              client_name, client_phone, delivery_address, status, driver_id,
-             partner_id, delivery_lat, delivery_lng, precision,
+             partner_id, delivery_lat, delivery_lng,
              proof_photo_url, postponed_date [+ colonnes facultatives])
      parcel_events(parcel_id, status, reason, author_id, author_role, lat, lng)
    Aucune table n'est créée, modifiée ou supprimée. Les droits d'accès
@@ -29,9 +29,9 @@
     drivers: ['id', 'profile_id', 'vehicle_type', 'vehicle_plate', 'zone', 'is_on_duty', 'consent_at'],
     driver_locations: ['driver_id', 'lat', 'lng', 'accuracy', 'speed', 'heading', 'battery_level', 'is_charging', 'recorded_at', 'created_at'],
     parcels: ['id', 'tracking_number', 'tracking_token', 'confirmation_code', 'client_name', 'client_phone',
-      'delivery_address', 'status', 'driver_id', 'partner_id', 'delivery_lat', 'delivery_lng', 'precision',
+      'delivery_address', 'status', 'driver_id', 'partner_id', 'delivery_lat', 'delivery_lng',
       'proof_photo_url', 'postponed_date'].concat(
-      ['createdAt', 'codAmount', 'deliveryFee', 'parcelType', 'weight', 'reason'].map((k) => PC[k]).filter(Boolean)),
+      ['createdAt', 'deliveredAt', 'postponedReason', 'cancellationReason', 'codAmount', 'deliveryFee', 'parcelType', 'weight'].map((k) => PC[k]).filter(Boolean)),
     parcel_events: ['parcel_id', 'status', 'reason', 'author_id', 'author_role', 'lat', 'lng', EVT_CREATED],
   };
 
@@ -143,12 +143,14 @@
     if (!hist.length || hist[0].s !== 'en_attente') hist.unshift({ t: createdAt, s: 'en_attente', note: 'Colis enregistré', by: P ? P.company_name : 'Agence' });
     if (hist[hist.length - 1].s !== statut) hist.push({ t: Math.max(createdAt, hist[hist.length - 1].t), s: statut, note: DEFAULT_NOTE[statut], by: 'Système' });
     const lastBad = [...hist].reverse().find((h) => ['echec', 'reporte', 'annule'].includes(h.s));
-    const motif = (PC.reason && row[PC.reason]) || (lastBad ? lastBad.note.split(' · ')[0] : '');
+    const colMotif = statut === 'annule' ? (PC.cancellationReason && row[PC.cancellationReason])
+      : ['reporte', 'echec'].includes(statut) ? (PC.postponedReason && row[PC.postponedReason]) : null;
+    const motif = (colMotif ? String(colMotif).replace(/^Échec : /, '') : '') || (lastBad ? lastBad.note.split(' · ')[0] : '');
     const c = {
       id: row.id, dbId: row.id, code: row.tracking_number || String(row.id).slice(0, 8), token: row.tracking_token,
       partnerId: row.partner_id, exp: { nom: P ? P.company_name : 'Expéditeur inconnu', tel: P ? P.contact_phone : '' },
       dest: { nom: row.client_name || 'Destinataire', tel: row.client_phone || '' },
-      zone: hasXY ? zoneOf(p) : null, x: p.x, y: p.y, noCoords: !hasXY, precision: row.precision,
+      zone: hasXY ? zoneOf(p) : null, x: p.x, y: p.y, noCoords: !hasXY,
       adresse: row.delivery_address || '', type: (PC.parcelType && row[PC.parcelType]) || 'standard',
       poids: PC.weight ? row[PC.weight] : null, cod: PC.codAmount ? Number(row[PC.codAmount]) || 0 : 0,
       frais: PC.deliveryFee && row[PC.deliveryFee] != null ? Number(row[PC.deliveryFee]) : fraisCalc(p, 'standard', 0),
@@ -244,7 +246,10 @@
     if (h.s === 'en_attente') { patch.driver_id = null; patch.postponed_date = null; }
     if (h.s === 'reporte') patch.postponed_date = new Date(c.postponedDate).toISOString();
     if (h.s === 'echec') patch.postponed_date = null;
-    if (PC.reason && ['echec', 'reporte', 'annule'].includes(h.s)) patch[PC.reason] = c.motif || null;
+    if (PC.postponedReason && h.s === 'reporte') patch[PC.postponedReason] = c.motif || null;
+    if (PC.postponedReason && h.s === 'echec') patch[PC.postponedReason] = 'Échec : ' + (c.motif || '');
+    if (PC.cancellationReason && h.s === 'annule') patch[PC.cancellationReason] = c.motif || null;
+    if (PC.deliveredAt && h.s === 'livre') patch[PC.deliveredAt] = new Date().toISOString();
     if (h.s === 'livre' && c.preuve && c.preuve.img && /^data:/.test(c.preuve.img) && CFG.proofBucket) {
       const path = `${c.dbId}/${Date.now()}.jpg`;
       check(await client().storage.from(CFG.proofBucket).upload(path, dataUrlToBlob(c.preuve.img), { contentType: 'image/jpeg', upsert: false }), 'Photo de preuve');

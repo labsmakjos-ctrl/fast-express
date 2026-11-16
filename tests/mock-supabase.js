@@ -5,8 +5,8 @@ const ALLOWED={
  partners:['id','company_name','contact_name','contact_phone','profile_id'],
  drivers:['id','profile_id','vehicle_type','vehicle_plate','zone','is_on_duty','consent_at'],
  driver_locations:['id','driver_id','lat','lng','accuracy','speed','heading','battery_level','is_charging','recorded_at','created_at'],
- parcels:['id','tracking_number','tracking_token','confirmation_code','client_name','client_phone','delivery_address','status','driver_id','partner_id','delivery_lat','delivery_lng','precision','proof_photo_url','postponed_date'],
- parcel_events:['id','parcel_id','author_id','author_role','status','reason','lat','lng','created_at'],
+ parcels:['id','tracking_number','tracking_token','confirmation_code','client_name','client_phone','delivery_address','status','driver_id','partner_id','delivery_lat','delivery_lng','proof_photo_url','postponed_date','created_at','updated_at','delivered_at','postponed_reason','cancellation_reason'],
+ parcel_events:['id','parcel_id','author_id','author_role','status','reason','lat','lng','created_at','metadata'],
 };
 const STATUSES=['pending','picked_up','in_transit','delivered','postponed','cancelled'];
 const LOG=window.__MOCKLOG=[];
@@ -17,11 +17,11 @@ const DB=window.__MOCKDB=JSON.parse(localStorage.getItem('__mockdb')||'null')||{
  drivers:[{id:'d-1',profile_id:'u-d1',vehicle_type:'Moto',vehicle_plate:'EE-123-AA',zone:'Glass',is_on_duty:true,consent_at:iso(now-9e8)},{id:'d-2',profile_id:'u-d2',vehicle_type:'Scooter',vehicle_plate:'GE-456-BC',zone:'Nzeng-Ayong',is_on_duty:true,consent_at:null}],
  driver_locations:[{id:1,driver_id:'d-1',lat:0.379,lng:9.444,accuracy:10,speed:null,heading:null,battery_level:80,is_charging:false,recorded_at:iso(now-3e5),created_at:iso(now-3e5)}],
  parcels:[
-  {id:'a1',tracking_number:'FE-26-20001',tracking_token:'tok-a1',confirmation_code:'1111',client_name:'Gaëlle Nguema',client_phone:'+241 066 00 00 01',delivery_address:'Derrière la pharmacie',status:'pending',driver_id:null,partner_id:'p-1',delivery_lat:0.3780,delivery_lng:9.4620,precision:null,proof_photo_url:null,postponed_date:null},
-  {id:'a2',tracking_number:'FE-26-20002',tracking_token:'tok-a2',confirmation_code:'2222',client_name:'Junior Ella',client_phone:'+241 066 00 00 02',delivery_address:'Face au marché',status:'pending',driver_id:'d-1',partner_id:'p-0',delivery_lat:0.3940,delivery_lng:9.4570,precision:null,proof_photo_url:null,postponed_date:null},
-  {id:'a3',tracking_number:'FE-26-20003',tracking_token:'tok-a3',confirmation_code:'3333',client_name:'Chancelle Ovono',client_phone:'+241 066 00 00 03',delivery_address:'Immeuble blanc',status:'postponed',driver_id:'d-1',partner_id:'p-1',delivery_lat:0.4170,delivery_lng:9.4860,precision:null,proof_photo_url:null,postponed_date:null},
-  {id:'a4',tracking_number:'FE-26-20004',tracking_token:'tok-a4',confirmation_code:'4444',client_name:'Brice Ndong',client_phone:'+241 066 00 00 04',delivery_address:'Villa jaune',status:'postponed',driver_id:'d-2',partner_id:'p-1',delivery_lat:0.4110,delivery_lng:9.4330,precision:null,proof_photo_url:null,postponed_date:iso(now+864e5)},
-  {id:'a5',tracking_number:'FE-26-20005',tracking_token:'tok-a5',confirmation_code:'5555',client_name:'Merveille Obame',client_phone:'+241 066 00 00 05',delivery_address:'Rond-point',status:'delivered',driver_id:'d-2',partner_id:'p-1',delivery_lat:null,delivery_lng:null,precision:null,proof_photo_url:null,postponed_date:null}],
+  {id:'a1',tracking_number:'FE-26-20001',tracking_token:'tok-a1',confirmation_code:'1111',client_name:'Gaëlle Nguema',client_phone:'+241 066 00 00 01',delivery_address:'Derrière la pharmacie',status:'pending',driver_id:null,partner_id:'p-1',delivery_lat:0.3780,delivery_lng:9.4620,proof_photo_url:null,postponed_date:null},
+  {id:'a2',tracking_number:'FE-26-20002',tracking_token:'tok-a2',confirmation_code:'2222',client_name:'Junior Ella',client_phone:'+241 066 00 00 02',delivery_address:'Face au marché',status:'pending',driver_id:'d-1',partner_id:'p-0',delivery_lat:0.3940,delivery_lng:9.4570,proof_photo_url:null,postponed_date:null},
+  {id:'a3',tracking_number:'FE-26-20003',tracking_token:'tok-a3',confirmation_code:'3333',client_name:'Chancelle Ovono',client_phone:'+241 066 00 00 03',delivery_address:'Immeuble blanc',status:'postponed',driver_id:'d-1',partner_id:'p-1',delivery_lat:0.4170,delivery_lng:9.4860,proof_photo_url:null,postponed_date:null},
+  {id:'a4',tracking_number:'FE-26-20004',tracking_token:'tok-a4',confirmation_code:'4444',client_name:'Brice Ndong',client_phone:'+241 066 00 00 04',delivery_address:'Villa jaune',status:'postponed',driver_id:'d-2',partner_id:'p-1',delivery_lat:0.4110,delivery_lng:9.4330,proof_photo_url:null,postponed_date:iso(now+864e5)},
+  {id:'a5',tracking_number:'FE-26-20005',tracking_token:'tok-a5',confirmation_code:'5555',client_name:'Merveille Obame',client_phone:'+241 066 00 00 05',delivery_address:'Rond-point',status:'delivered',driver_id:'d-2',partner_id:'p-1',delivery_lat:null,delivery_lng:null,proof_photo_url:null,postponed_date:null}],
  parcel_events:[{id:1,parcel_id:'a2',author_id:'u-mgr',author_role:'manager',status:'pending',reason:'Attribué manuellement à Rodrigue Ondo',lat:null,lng:null,created_at:iso(now-36e5)},{id:2,parcel_id:'a3',author_id:'u-d1',author_role:'driver',status:'postponed',reason:'Échec : Destinataire injoignable',lat:0.41,lng:9.48,created_at:iso(now-18e5)}],
 };
 const USERS={'manager@test.ga':'u-mgr','rodrigue@test.ga':'u-d1','prisca@test.ga':'u-d2','gts@test.ga':'u-p1'};

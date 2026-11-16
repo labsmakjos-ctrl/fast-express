@@ -21,12 +21,16 @@ window.FE_CONFIG = {
   // exact de la colonne pour activer l'enregistrement correspondant.
   optionalColumns: {
     parcels: {
-      createdAt: null,        // ex. 'created_at'
-      codAmount: null,        // montant à encaisser, ex. 'cod_amount'
+      // Confirmées par le diagnostic du 16/11 sur le projet Supabase :
+      createdAt: 'created_at',                 // date de création
+      deliveredAt: 'delivered_at',             // date de livraison (remplie à la livraison)
+      postponedReason: 'postponed_reason',     // motif de report et d'échec
+      cancellationReason: 'cancellation_reason', // motif d'annulation
+      // Absentes de la table parcels (laisser null tant qu'elles n'existent pas) :
+      codAmount: null,        // montant à encaisser
       deliveryFee: null,      // frais de livraison
       parcelType: null,       // type de colis
       weight: null,           // poids
-      reason: null,           // colonne de motif (échec, report, annulation)
     },
     parcelEvents: { createdAt: 'created_at' },
   },
