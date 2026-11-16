@@ -550,3 +550,17 @@ td .sub{display:block;color:var(--muted);font-size:12px}
 .map-note .ic{color:var(--warn);flex:none;margin-top:1px}
 /* Espace livreur : les messages s'affichent en haut pour ne jamais cacher les boutons */
 .drv-mode .toasts{top:calc(66px + env(safe-area-inset-top,0px));bottom:auto}
+
+/* ---------- Service et position du livreur ---------- */
+.duty-off{border-color:var(--gold);box-shadow:0 0 0 3px var(--gold-soft)}
+.reqline{display:flex;flex-direction:column;align-items:flex-start;gap:6px;padding-top:8px;border-top:1px dashed var(--line);margin-top:4px}
+.dotc{width:8px;height:8px;border-radius:50%;background:var(--faint);display:inline-block}
+.dotc.on{background:var(--ok);box-shadow:0 0 0 3px var(--ok-soft)}
+.t-ok{color:var(--ok);font-weight:600}.t-warn{color:var(--warn);font-weight:600}.t-bad{color:var(--bad);font-weight:600}
+.lmk{position:relative}
+.lmk.pos-old span{filter:grayscale(.75);opacity:.75}
+.lmk.pos-lost span{filter:grayscale(1);opacity:.5;border-style:dashed}
+.lmk em{position:absolute;left:50%;top:31px;transform:translateX(-50%);font:700 9.5px var(--f-body);font-style:normal;white-space:nowrap;background:#12201b;color:#fff;border-radius:6px;padding:1px 5px}
+.lmk.pos-lost em{background:var(--bad)}
+.lg-pos{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:-1px;border:2px solid var(--brand)}
+.lg-pos.fresh{background:var(--brand)}.lg-pos.old{background:var(--faint);border-color:var(--faint)}.lg-pos.lost{background:transparent;border-style:dashed;border-color:var(--bad)}

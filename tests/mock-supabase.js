@@ -71,8 +71,27 @@ const client={
   async getSession(){return{data:{session},error:null}},
   async signOut(){const had=!!session;session=null;localStorage.removeItem('__mocksession');if(had)AUTHL.forEach(f=>setTimeout(()=>f('SIGNED_OUT',null),0));return{error:null}},
   onAuthStateChange(f){AUTHL.push(f);return{data:{subscription:{unsubscribe(){}}}}}},
- channel(){const ch={hs:[],on(ev,f,cb){this.hs.push([f,cb]);return this},subscribe(){listeners.push((t,e,row)=>this.hs.forEach(([f,cb])=>{if(f.table===t&&(f.event==='*'||f.event===e))setTimeout(()=>cb({new:row,eventType:e}),10)}));window.__CH=this;return this}};return ch},
- removeChannel(){},
+ channel(name,opts){const key=opts&&opts.config&&opts.config.presence&&opts.config.presence.key;
+  const ch={name,key,hs:[],rt:[],pres:{},mine:null,bc:null,
+   on(ev,f,cb){if(ev==='postgres_changes')this.hs.push([f,cb]);else this.rt.push([ev,f,cb]);return this},
+   subscribe(statusCb){
+    if(this.hs.length){listeners.push((t,e,row)=>this.hs.forEach(([f,cb])=>{if(f.table===t&&(f.event==='*'||f.event===e))setTimeout(()=>cb({new:row,eventType:e}),10)}));window.__CH=this}
+    if(this.rt.length){const self=this;window.__RTCH=this;
+     if(window.__RT_DOWN){setTimeout(()=>statusCb&&statusCb('CHANNEL_ERROR'),10);return this}
+     this.bc=new BroadcastChannel('mockrt:'+name);
+     const sync=()=>this.rt.forEach(([ev,f,cb])=>{if(ev==='presence'&&f.event==='sync')cb()});
+     this.bc.onmessage=({data:m})=>{
+      if(m.kind==='broadcast')self.rt.forEach(([ev,f,cb])=>{if(ev==='broadcast'&&f.event===m.event)cb({payload:m.payload})});
+      else if(m.kind==='presence'){if(m.state)self.pres[m.key]=m.state;else delete self.pres[m.key];sync()}
+      else if(m.kind==='hello'&&self.mine)self.bc.postMessage({kind:'presence',key:self.key,state:self.mine})};
+     this.bc.postMessage({kind:'hello'});setTimeout(()=>statusCb&&statusCb('SUBSCRIBED'),10)}
+    return this},
+   async send(m){if(window.__RT_DOWN||!this.bc)return'error';LOG.push({t:'realtime',event:m.event,payload:m.payload});this.bc.postMessage({kind:'broadcast',event:m.event,payload:m.payload});return'ok'},
+   async track(st){this.mine=st;if(this.bc)this.bc.postMessage({kind:'presence',key:this.key,state:st});return'ok'},
+   async untrack(){this.mine=null;if(this.bc)this.bc.postMessage({kind:'presence',key:this.key,state:null});return'ok'},
+   presenceState(){const o={};Object.entries(this.pres).forEach(([k,v])=>o[k]=[v]);return o}};
+  return ch},
+ removeChannel(ch){if(ch&&ch.bc){try{ch.bc.close()}catch(e){}ch.bc=null}},
  storage:{from:b=>({async upload(path){LOG.push({t:'storage',bucket:b,path});return{data:{path},error:null}},async createSignedUrls(ps){return{data:ps.map(p=>({path:p,signedUrl:'data:image/gif;base64,R0lGODlhAQABAAAAACw='})),error:null}}})},
  async rpc(){return err('function does not exist')},
 };

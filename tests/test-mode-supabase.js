@@ -55,7 +55,7 @@ await p.waitForTimeout(800);
 const loc=await p.evaluate(()=>__MOCKLOG.filter(x=>x.t==='driver_locations'));
 ok('Position GPS insérée dans driver_locations (colonnes réelles)',loc.length>=1&&!loc.some(x=>x.error)&&loc[0].row.driver_id==='d-1'&&Math.abs(loc[0].row.lat-0.3801)<1e-6&&'recorded_at' in loc[0].row&&'accuracy' in loc[0].row,JSON.stringify(loc[0]&&loc[0].row));
 await p.click('[data-pick="FE-26-20002"]');await p.waitForTimeout(500);
-await p.click('[data-start="FE-26-20002"]');await p.waitForTimeout(200);await p.click('#shareYes');await p.waitForTimeout(800);
+await p.click('[data-start="FE-26-20002"]');await p.waitForTimeout(800);
 await p.click('[data-confirm="FE-26-20002"]');await p.waitForTimeout(200);await p.fill('#dsOtp','2222');await p.click('#dsOk');await p.waitForTimeout(700);
 const a2=await p.evaluate(()=>({st:__MOCKDB.parcels.find(r=>r.id==='a2').status,ev:__MOCKDB.parcel_events.filter(e=>e.parcel_id==='a2').map(e=>e.status+'|'+e.author_role+'|'+(e.lat!=null))}));
 ok('Livreur : picked_up → in_transit → delivered, avec position et auteur',a2.st==='delivered'&&['picked_up|driver|true','in_transit|driver|true','delivered|driver|true'].every(s=>a2.ev.includes(s)),JSON.stringify(a2));
@@ -72,16 +72,15 @@ ok('Motifs écrits dans postponed_reason (échec et report)',/^Échec : /.test(r
 ok('Date de livraison écrite dans delivered_at',await p.evaluate(()=>!!__MOCKDB.parcels.find(r=>r.id==='a2').delivered_at));
 ok('Report : status postponed avec postponed_date',ee[1].status==='postponed'&&!!ee[1].date&&Date.parse(ee[1].date)>Date.now(),JSON.stringify(ee[1]));
 // hors service
-await p.evaluate(()=>{drvDetail=null;drvTab='profil';R.livreur()});await p.click('[data-av="hors_service"]');await p.waitForTimeout(500);
-ok('Hors service → drivers.is_on_duty = false',await p.evaluate(()=>__MOCKDB.drivers.find(d=>d.id==='d-1').is_on_duty===false));
-await p.click('[data-av="disponible"]');await p.waitForTimeout(400);
+await p.evaluate(()=>{drvDetail=null;drvTab='profil';R.livreur()});await p.click('#dutyOff');await p.waitForTimeout(600);
+ok('Terminer mon service → drivers.is_on_duty = false, GPS arrêté',await p.evaluate(()=>__MOCKDB.drivers.find(d=>d.id==='d-1').is_on_duty===false&&GPS.watch==null));
+const nLoc=await p.evaluate(()=>__MOCKLOG.filter(x=>x.t==='driver_locations').length);
+await p.click('#dutyOn');await p.waitForTimeout(1500);
+ok('Passer en service → première position envoyée, puis is_on_duty = true',await p.evaluate(n=>__MOCKDB.drivers.find(d=>d.id==='d-1').is_on_duty===true&&__MOCKLOG.filter(x=>x.t==='driver_locations').length>n,nLoc));
 await p.evaluate(()=>logout());await p.waitForTimeout(400);
-// livreur sans accord GPS
-await p.fill('#lg1','prisca@test.ga');await p.fill('#lg2','secret');await p.click('#lgGo');await p.waitForTimeout(1200);
-const before=await p.evaluate(()=>__MOCKLOG.filter(x=>x.t==='driver_locations'&&x.row&&x.row.driver_id==='d-2').length);
-ok('Sans consent_at : aucune position envoyée',before===0&&await p.evaluate(()=>!!document.querySelector('#gpsOk')));
-await p.click('#gpsOk');await p.waitForTimeout(1500);
-ok('Accord → drivers.consent_at enregistré puis positions envoyées',await p.evaluate(()=>!!__MOCKDB.drivers.find(d=>d.id==='d-2').consent_at&&__MOCKLOG.some(x=>x.t==='driver_locations'&&x.row&&x.row.driver_id==='d-2')));
+// livreur déjà en service, jamais informé (consent_at vide)
+await p.fill('#lg1','prisca@test.ga');await p.fill('#lg2','secret');await p.click('#lgGo');await p.waitForTimeout(1800);
+ok('Livreur en service : GPS démarré automatiquement, consent_at enregistré, position envoyée',await p.evaluate(()=>!!__MOCKDB.drivers.find(d=>d.id==='d-2').consent_at&&__MOCKLOG.some(x=>x.t==='driver_locations'&&x.row&&x.row.driver_id==='d-2')&&!document.querySelector('#gpsOk')));
 await p.evaluate(()=>logout());await p.waitForTimeout(400);
 // manager : temps réel + session restaurée
 await p.fill('#lg1','manager@test.ga');await p.fill('#lg2','secret');await p.click('#lgGo');await p.waitForTimeout(1000);
@@ -134,6 +133,36 @@ await p.evaluate(()=>logout());await p.waitForTimeout(400);
 const errsMock=await p.evaluate(()=>__MOCKLOG.filter(x=>x.error));
 ok('Aucune colonne inconnue ni statut invalide envoyé à Supabase',errsMock.length===0,JSON.stringify(errsMock));
 ok('Aucune erreur JavaScript',errs.length===0,errs.join(' | '));
+// ---------- demandes de position : Realtime Broadcast ----------
+const pD=await ctx.newPage();pD.on('pageerror',e=>errs.push('rt: '+e.message));
+await pD.goto(URL);await pD.evaluate(()=>localStorage.removeItem('__mocksession'));await pD.reload();await pD.waitForTimeout(600);
+await pD.fill('#lg1','rodrigue@test.ga');await pD.fill('#lg2','secret');await pD.click('#lgGo');await pD.waitForTimeout(1800);
+ok('Reconnexion après déconnexion : le livreur repart hors service',await pD.evaluate(()=>me().statut==='hors_service'&&GPS.watch==null&&!!document.querySelector('#dutyOn')));
+await pD.click('#dutyOn');await pD.waitForTimeout(1500);
+ok('Livreur : canal Realtime rejoint, en service avec position',await pD.evaluate(()=>RT.status==='ready'&&me().statut==='disponible'&&GPS.watch!=null));
+const pM=await ctx.newPage();pM.on('pageerror',e=>errs.push('rt: '+e.message));
+await pM.addInitScript(()=>{try{localStorage.removeItem('__mocksession')}catch(e){}});
+await pM.goto(URL);await pM.waitForTimeout(600);await pM.fill('#lg1','manager@test.ga');await pM.fill('#lg2','secret');await pM.click('#lgGo');await pM.waitForTimeout(1200);
+await pM.evaluate(()=>location.hash='livreurs');await pM.waitForTimeout(800);
+ok('Gestionnaire : présence Realtime du livreur (« Application ouverte »)',await pM.evaluate(()=>RT.status==='ready'&&isOnline(LV('d-1'))&&!isOnline(LV('d-2'))));
+await pM.click('[data-req="d-1"]');await pM.waitForTimeout(2500);
+let rq=await pM.evaluate(()=>GPSREQ['d-1']);
+ok('Broadcast : demande reçue par le livreur, position envoyée',rq&&rq.received===true&&rq.state==='sent'&&await pD.evaluate(()=>__MOCKLOG.some(x=>x.t==='realtime'&&x.event==='gps_ack')),JSON.stringify(rq));
+await pD.evaluate(()=>{drvTab='profil';drvDetail=null;R.livreur()});await pD.click('#dutyOff');await pD.waitForTimeout(600);
+await pM.click('[data-req="d-1"]');await pM.waitForTimeout(2500);
+rq=await pM.evaluate(()=>GPSREQ['d-1']);
+ok('Broadcast : livreur hors service → « Reçue · hors service »',rq&&rq.received&&rq.state==='off_duty'&&await pD.evaluate(()=>/L'agence a demandé votre position/.test(document.body.innerText)),JSON.stringify(rq));
+await pM.click('[data-req="d-2"]');await pM.waitForTimeout(16500);
+rq=await pM.evaluate(()=>GPSREQ['d-2']);
+ok('Broadcast : livreur sans application ouverte → « Non reçue » (aucune fausse confirmation)',rq&&rq.received===false&&rq.state==='no_answer'&&/Non reçue/.test(await pM.evaluate(()=>document.body.innerText)),JSON.stringify(rq));
+await pM.evaluate(()=>{window.__RT_DOWN=true;rtLeave();rtJoin()});await pM.waitForTimeout(300);
+await pM.click('[data-req="d-1"]');await pM.waitForTimeout(600);
+rq=await pM.evaluate(()=>GPSREQ['d-1']);
+ok('Canal Realtime indisponible → « Envoi impossible »',rq&&rq.received===false&&rq.state==='unavailable'&&/Envoi impossible/.test(await pM.evaluate(()=>document.body.innerText)),JSON.stringify(rq));
+await pD.click('#dutyOn');await pD.waitForTimeout(1500);
+await pD.evaluate(()=>logout());await pD.waitForTimeout(800);
+ok('Déconnexion du livreur en service → is_on_duty = false enregistré avant la fermeture de session',await pD.evaluate(()=>__MOCKDB.drivers.find(d=>d.id==='d-1').is_on_duty===false&&AUTH===null&&GPS.watch==null));
+await pD.close();await pM.close();
 // ---------- mode démo par défaut (site public) ----------
 const d=await b.newContext({viewport:{width:1300,height:850}});
 await d.route('**/vendor/supabase.js',r=>r.fulfill({contentType:'application/javascript',body:fs.readFileSync(D+'mock-supabase.js','utf8')}));

@@ -172,7 +172,7 @@ function seed(){
  const LVD=[['Rodrigue Ondo','Moto Yamaha Crypton','Nzeng-Ayong',4.9],['Prisca Mba','Scooter Honda','Glass',4.8],['Davy Obiang','Moto Haojue','Angondjé',4.6],['Landry Mabika','Voiture Toyota Vitz','Owendo',4.7],['Christelle Mintsa','Scooter Honda','Louis',4.9],['Hervé Nzamba','Moto Yamaha Crypton','PK8',4.4],['Yannick Essono','Moto Haojue','Okala',4.5],['Ornella Koumba','Voiture Suzuki Alto','Mont-Bouët',4.8]];
  LVD.forEach((l,i)=>{const z=ZI[l[2]];const uid='UD'+(i+1);const phone=tel();
   st.users.push({id:uid,email:slug(l[0])+'@fastexpress.demo',role:'driver',full_name:l[0],phone});
-  st.livreurs.push({id:'L'+(i+1),profileId:uid,nom:l[0],tel:phone,vehicule:l[1],plaque:`${pick(['EE','GE','AB'])}-${ri(100,999)}-${pick(['AA','BC','DF','HK'])}`,zone:l[2],zones:secteur(l[2]),statut:i===6?'hors_service':'disponible',consentAt:i===7?null:now-ri(5,60)*D,note:l[3],couleur:AVC[i],pos:{x:z.x+ri(-8,8),y:z.y+ri(-8,8)},posAt:now-ri(1,9)*MIN,depuis:pick(['mars 2024','janv. 2025','juin 2023','sept. 2024','févr. 2026'])})});
+  st.livreurs.push({id:'L'+(i+1),profileId:uid,nom:l[0],tel:phone,vehicule:l[1],plaque:`${pick(['EE','GE','AB'])}-${ri(100,999)}-${pick(['AA','BC','DF','HK'])}`,zone:l[2],zones:secteur(l[2]),statut:i===6?'hors_service':'disponible',consentAt:i===7?null:now-ri(5,60)*D,note:l[3],couleur:AVC[i],pos:{x:z.x+ri(-8,8),y:z.y+ri(-8,8)},offline:i===4||i===5,posAt:i===4?now-6*MIN:i===5?now-25*MIN:now-ri(10,80)*1000,depuis:pick(['mars 2024','janv. 2025','juin 2023','sept. 2024','févr. 2026'])})});
  const actifs=st.livreurs.filter(l=>l.statut==='disponible');
  const PATH={en_attente:[],attribue:['attribue'],recupere:['attribue','recupere'],en_cours:['attribue','recupere','en_cours'],livre:['attribue','recupere','en_cours','livre'],echec:['attribue','recupere','en_cours','echec'],reporte:['attribue','recupere','en_cours','reporte'],annule:['annule']};
  const mk=(dayAgo,statut,opt={})=>{
@@ -787,11 +787,14 @@ R.livreurs=()=>{
   <div class="row wrap small" style="gap:8px"><span>${esc(l.vehicule)}</span><span class="plate">${esc(l.plaque)}</span></div>
   <div class="small"><span class="muted">Zone principale :</span> <b>${esc(l.zone)}</b><div class="muted" style="margin-top:2px">Secteur : ${esc((l.zones||[]).filter(z=>z!==l.zone).join(', ')||'—')}</div></div>
   <div><div class="row between small"><span class="muted">Colis actifs</span><span class="row" style="gap:6px"><b class="num">${charge(l)}</b><span class="muted">/ ${capOf(l)} max (${vehicleKind(l.vehicule)})</span></span></div><div class="capbar"><i class="${charge(l)>=capOf(l)?'full':charge(l)/capOf(l)>=.75?'high':''}" style="width:${Math.min(100,charge(l)/capOf(l)*100)}%"></i></div></div>
-  <div class="row between"><select class="select" data-st="${l.id}" style="width:auto;padding:6px 10px;font-size:13px" aria-label="Statut de ${esc(l.nom)}">${Object.keys(LST).map(k=>`<option value="${k}" ${l.statut===k?'selected':''}>${LST[k].l}</option>`).join('')}</select>${lstate(l)}</div>
+  <div class="row between wrap" style="gap:8px">${lstate(l)}${onDuty(l)?posPill(l):''}${onDuty(l)?`<button class="btn sm danger" type="button" data-off="${l.id}">Mettre hors service</button>`:''}</div>
+  ${onDuty(l)?`<p class="small muted" style="margin:0">Position : ${esc(posState(l).d)}</p>`:`<p class="small muted" style="margin:0">Passe en service depuis son téléphone (position obligatoire).</p>`}
+  ${reqHtml(l)}
   <div class="lstats"><div><b>${charge(l)}</b><span>en cours</span></div><div><b>${today}</b><span>livrés auj.</span></div><div><b>${ok+ko?Math.round(ok/(ok+ko)*100):'–'}${ok+ko?'<small style="font-size:12px"> %</small>':''}</b><span>réussite 7 j</span></div></div>
   <div class="row">${MODE==='demo'?`<button class="btn sm" data-app="${l.id}" style="flex:1;justify-content:center">${ic('phone',14)}Ouvrir son espace</button>`:''}<button class="btn sm" data-map="${l.id}">${ic('map',14)}Carte</button></div></div>`}).join('')}</div>`;
  document.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>{livF=b.dataset.f;R.livreurs()});
- document.querySelectorAll('[data-st]').forEach(s=>s.onchange=()=>{const l=LV(s.dataset.st);const old=l.statut;l.statut=s.value;log('livreur','',`${l.nom} : ${LST[old].l} → ${LST[s.value].l}`,me0());save();remote('duty',l);toast(`${esc(l.nom)} est maintenant « ${LST[s.value].l} »`);refresh()});
+ document.querySelectorAll('[data-off]').forEach(b=>b.onclick=()=>{const l=LV(b.dataset.off);if(!l||!onDuty(l))return;l.statut='hors_service';log('livreur','',`${l.nom} mis hors service par l'agence`,me0());save();remote('duty',l);toast(`${esc(l.nom)} est maintenant hors service · son partage de position s'arrête`);refresh()});
+ bindReq();
  document.querySelectorAll('[data-app]').forEach(b=>b.onclick=()=>{drvOpenAs(b.dataset.app)});
  document.querySelectorAll('[data-map]').forEach(b=>b.onclick=()=>{mapSel={k:'l',id:b.dataset.map};go('carte')});
  $('#lNew').onclick=newLivreurModal;
@@ -840,6 +843,7 @@ R.carte=()=>{
    <div class="card"><div class="card-b" id="mapInfo"></div></div>
    <div class="card"><div class="card-h"><h2>Livreurs en service</h2></div><div class="card-b stack" style="gap:2px;padding-top:8px" id="mapList"></div></div>
    <div class="legend" style="padding:0 4px">${[['en_cours','En livraison'],['recupere','Récupéré'],['attribue','Attribué'],['en_attente','En attente']].map(([k,t])=>`<span><i style="background:${ACT_COL[k]};border-radius:50%"></i>${t}</span>`).join('')}</div>
+   <div class="legend" style="padding:0 4px"><span><i class="lg-pos fresh"></i>Position à jour (moins de ${Math.round(POS_FRESH/MIN)} min)</span><span><i class="lg-pos old"></i>Ancienne (${Math.round(POS_FRESH/MIN)} à ${Math.round(POS_STALE/MIN)} min)</span><span><i class="lg-pos lost"></i>Indisponible</span></div>
    <p class="small faint" style="margin:0 4px">${MODE==='supabase'?'Positions GPS réelles envoyées par les livreurs en service (toutes les 2 minutes).':'Démo : positions simulées. Les centres de quartiers sont approximatifs.'}</p>
   </div>
  </div>`;
@@ -858,7 +862,7 @@ R.carte=()=>{
 /* Dessine (ou redessine) les couches sans recréer la carte : le zoom et la position sont conservés */
 function mapDraw(){
  const list=$('#mapList');
- if(list)list.innerHTML=S.livreurs.filter(onDuty).map(l=>{const c=S.colis.find(x=>x.livreurId===l.id&&x.statut==='en_cours');return`<button class="conv" style="padding:8px 4px;border-bottom:1px dashed var(--line)" data-ml="${l.id}">${av(l,30)}<span class="c"><b>${esc(l.nom)}</b><span>${c?`Vers ${esc(zoneLabel(c))} · ${c.code}`:charge(l)?`${charge(l)} colis actifs`:'Disponible · '+esc(l.zone||'')}${l.posAt?` · position ${ago(l.posAt)}`:''}</span></span>${lstate(l)}</button>`}).join('')||'<p class="small muted" style="margin:0">Aucun livreur en service.</p>';
+ if(list)list.innerHTML=S.livreurs.filter(onDuty).map(l=>{const c=S.colis.find(x=>x.livreurId===l.id&&x.statut==='en_cours');return`<button class="conv" style="padding:8px 4px;border-bottom:1px dashed var(--line)" data-ml="${l.id}">${av(l,30)}<span class="c"><b>${esc(l.nom)}</b><span>${c?`Vers ${esc(zoneLabel(c))} · ${c.code}`:charge(l)?`${charge(l)} colis actifs`:'Disponible · '+esc(l.zone||'')}</span><span class="small">${posPill(l)} <span class="muted">${esc(posState(l).d)}</span></span></span>${lstate(l)}</button>`}).join('')||'<p class="small muted" style="margin:0">Aucun livreur en service.</p>';
  document.querySelectorAll('[data-ml]').forEach(b=>b.onclick=()=>{mapSel={k:'l',id:b.dataset.ml};mapInfo();const l=LV(b.dataset.ml);if(LM&&l?.pos)LM.panTo(llOf(l.pos))});
  if(!LM||!document.getElementById('lmap'))return;
  const g=LM._fe;g.clearLayers();LMK={};
@@ -867,19 +871,21 @@ function mapDraw(){
  if(mapLayers.d)S.colis.filter(c=>['en_attente',...ACTIVE].includes(c.statut)&&(!isPartner()||c.partnerId===AUTH.partnerId)).forEach(c=>{
   L.circleMarker(llOf(c),{radius:7,color:'#fff',weight:2,fillColor:ACT_COL[c.statut],fillOpacity:1}).bindTooltip(`${c.code} · ${zoneLabel(c)}`).on('click',()=>{mapSel={k:'c',id:c.code};mapInfo()}).addTo(g)});
  if(mapLayers.l)S.livreurs.filter(l=>onDuty(l)&&l.pos&&Number.isFinite(l.pos.x)).forEach(l=>{
-  LMK[l.id]=L.marker(llOf(l.pos),{icon:L.divIcon({className:'lmk'+(mapSel?.k==='l'&&mapSel.id===l.id?' sel':'')+(charge(l)?' busy':''),html:`<span style="background:${l.couleur}">${initials(l.nom)}</span>`,iconSize:[30,30]}),title:l.nom,zIndexOffset:500})
+  const ps=posState(l);
+  LMK[l.id]=L.marker(llOf(l.pos),{icon:L.divIcon({className:'lmk pos-'+ps.k+(mapSel?.k==='l'&&mapSel.id===l.id?' sel':'')+(charge(l)&&ps.k==='fresh'?' busy':''),html:`<span style="background:${l.couleur}">${initials(l.nom)}</span>${ps.k!=='fresh'?`<em>${ps.k==='old'?esc(ago(l.posAt).replace('il y a ','')):'?'}</em>`:''}`,iconSize:[30,30]}),title:`${l.nom} · position ${ps.l.toLowerCase()} · ${ps.d}`,zIndexOffset:ps.k==='fresh'?500:300})
    .on('click',()=>{mapSel={k:'l',id:l.id};mapInfo();mapDraw()}).addTo(g)});
 }
 function mapInfo(){
  const el=$('#mapInfo');if(!el)return;
  if(mapSel&&mapSel.k==='l'){const l=LV(mapSel.id);if(l){const ms=S.colis.filter(c=>c.livreurId===l.id&&ACTIVE.includes(c.statut));
-  el.innerHTML=`<div class="row" style="margin-bottom:12px">${av(l,40)}<div><b>${esc(l.nom)}</b><div class="small muted">${esc(l.vehicule)} · <span class="plate">${esc(l.plaque)}</span></div></div></div><div class="row between small" style="margin-bottom:10px">${lstate(l)}<span class="muted num">${esc(l.tel)}</span></div>${l.posAt?`<p class="small muted" style="margin:0 0 8px">Dernière position : ${ago(l.posAt)}</p>`:''}${ms.length?ms.map(c=>`<div class="todo" style="padding:8px 0"><div style="flex:1;min-width:0"><button class="lnk" data-open="${c.code}">${c.code}</button><div class="small muted">${esc(c.dest.nom)} · ${esc(zoneLabel(c))}</div></div>${badge(c.statut)}</div>`).join(''):'<p class="small muted" style="margin:0">Aucune mission en cours.</p>'}`;bindOpen(el);return}}
+  el.innerHTML=`<div class="row" style="margin-bottom:12px">${av(l,40)}<div><b>${esc(l.nom)}</b><div class="small muted">${esc(l.vehicule)} · <span class="plate">${esc(l.plaque)}</span></div></div></div><div class="row between small" style="margin-bottom:10px">${lstate(l)}<span class="muted num">${esc(l.tel)}</span></div><p class="small" style="margin:0 0 8px">${onDuty(l)?posPill(l)+' <span class="muted">'+esc(posState(l).d)+'</span>':'<span class="muted">Hors service : position non partagée</span>'}</p>${reqHtml(l)}${ms.length?ms.map(c=>`<div class="todo" style="padding:8px 0"><div style="flex:1;min-width:0"><button class="lnk" data-open="${c.code}">${c.code}</button><div class="small muted">${esc(c.dest.nom)} · ${esc(zoneLabel(c))}</div></div>${badge(c.statut)}</div>`).join(''):'<p class="small muted" style="margin:0">Aucune mission en cours.</p>'}`;bindOpen(el);bindReq(el);return}}
  if(mapSel&&mapSel.k==='c'){const c=CO(mapSel.id);if(c){const L2=LV(c.livreurId);el.innerHTML=`<div class="row between" style="margin-bottom:8px"><span class="mono" style="font-weight:600;font-size:15px">${c.code}</span>${badge(c.statut)}</div><b>${esc(c.dest.nom)}</b><p class="small muted" style="margin:2px 0 10px">${esc(zoneLabel(c))} · ${esc(c.adresse)}</p><p class="small" style="margin:0 0 12px">${L2?`Livreur : <b>${esc(L2.nom)}</b>`:'<span class="muted">Aucun livreur attribué</span>'}</p><button class="btn sm pri" data-open="${c.code}">Ouvrir le colis</button>`;bindOpen(el);return}}
  if(mapSel&&mapSel.k==='hq'){el.innerHTML=`<b>${HQ.n}</b><p class="small muted" style="margin:4px 0 0">Comptoir d'enregistrement et entrepôt. Les frais sont calculés selon la distance depuis l'agence.</p>`;return}
  const enc=S.colis.filter(c=>c.statut==='en_cours').length;
- el.innerHTML=`<b style="font-family:var(--f-display);font-size:16px">Libreville en direct</b><p class="small muted" style="margin:4px 0 10px">Cliquez sur un livreur, une destination ou l'agence pour afficher le détail.</p><div class="row wrap small" style="gap:14px"><span><b class="num">${S.livreurs.filter(l=>charge(l)>0).length}</b> livreurs en tournée</span><span><b class="num">${enc}</b> colis sur la route</span></div>`}
+ el.innerHTML=`<b style="font-family:var(--f-display);font-size:16px">Libreville en direct</b><p class="small muted" style="margin:4px 0 10px">Cliquez sur un livreur, une destination ou l'agence pour afficher le détail.</p><div class="row wrap small" style="gap:14px"><span><b class="num">${S.livreurs.filter(l=>charge(l)>0).length}</b> livreurs en tournée</span><span><b class="num">${enc}</b> colis sur la route</span></div>${(()=>{const bad=S.livreurs.filter(l=>onDuty(l)&&posState(l).k!=='fresh');return bad.length?`<div class="banner" style="margin-top:10px;background:var(--warn-soft);color:var(--warn)">${ic('alert',16)}<span><b>${bad.length} livreur${bad.length>1?'s':''} en service sans position à jour :</b> ${bad.map(l=>`<button class="lnk" style="font-family:var(--f-body)" data-ml2="${l.id}">${esc(l.nom)}</button> (${esc(posState(l).l.toLowerCase())})`).join(', ')}</span></div>`:''})()}`;
+ el.querySelectorAll('[data-ml2]').forEach(b=>b.onclick=()=>{mapSel={k:'l',id:b.dataset.ml2};mapInfo();mapDraw()})}
 function target(l){const c=S.colis.find(x=>x.livreurId===l.id&&x.statut==='en_cours');if(c)return{x:c.x,y:c.y};if(S.colis.some(x=>x.livreurId===l.id&&(x.statut==='attribue'||x.statut==='recupere')))return{x:HQ.x+6,y:HQ.y+4};return null}
-function step(l,sp){const t=target(l);if(!t||!l.pos)return;const dx=t.x-l.pos.x,dy=t.y-l.pos.y,d=Math.hypot(dx,dy);if(d<1)return;const s=Math.min(sp,d);l.pos.x+=dx/d*s;l.pos.y+=dy/d*s;l.posAt=Date.now()}
+function step(l,sp){if(l.offline)return;const t=target(l);if(!t||!l.pos)return;const dx=t.x-l.pos.x,dy=t.y-l.pos.y,d=Math.hypot(dx,dy);if(d<1)return;const s=Math.min(sp,d);l.pos.x+=dx/d*s;l.pos.y+=dy/d*s}
 let lastSave=0;
 /* Démo uniquement : déplacement simulé des livreurs. En mode Supabase, les positions viennent du GPS. */
 function startAnim(){cancelAnimationFrame(raf);if(MODE!=='demo')return;let lastDraw=0;const loop=t=>{if(cur!=='carte')return;S.livreurs.forEach(l=>{if(!onDuty(l))return;step(l,.12);const m=LMK[l.id];if(m&&t-lastDraw>120)m.setLatLng(llOf(l.pos))});if(t-lastDraw>120)lastDraw=t;if(Date.now()-lastSave>5000){lastSave=Date.now();save()}raf=requestAnimationFrame(loop)};if(!matchMedia('(prefers-reduced-motion: reduce)').matches)raf=requestAnimationFrame(loop)}
@@ -947,7 +953,7 @@ const DONE=['livre','reporte','annule','echec'];
 const lastT=c=>c.hist.at(-1).t;
 function drvTyping(){const a=document.activeElement;return a&&$('#drv').contains(a)&&/INPUT|TEXTAREA|SELECT/.test(a.tagName)}
 function drvSetSession(id){drvPreview=id;drvId=id}
-function drvLogout(silent){gpsStop();drvSetSession(null);drvTab='missions';drvDetail=null;drvSheet=null;drvPhoto=null;if(!silent){if(isDriver())logout();else go('livreurs')}}
+function drvLogout(silent){if(!silent&&isDriver()){logout();return}gpsStop();drvSetSession(null);drvTab='missions';drvDetail=null;drvSheet=null;drvPhoto=null;if(!silent)go('livreurs')}
 function drvOpenAs(id){const l=LV(id);if(!l||MODE!=='demo')return;drvSetSession(id);drvTab='missions';drvDetail=null;drvSheet=null;go('livreur')}
 /* Un livreur ne peut agir que sur ses propres colis */
 function myColis(code){const c=CO(code);if(c&&c.livreurId===drvId)return c;toast('Ce colis ne fait plus partie de vos missions','warn');drvDetail=null;drvSheet=null;R.livreur();return null}
@@ -978,7 +984,8 @@ R.livreur=()=>{
  </div>`;
  if(keepScroll)root.querySelector('.drv-body').scrollTop=scroll;
  drvBind();
- if(gpsWanted())gpsStart();else gpsStop();
+ if(gpsWanted())ensureGps();
+ else if(GPS.watch||GPS.timer||GPS.starting){gpsStop();if(isDriver())toast('Service terminé : partage de position arrêté','warn')}
 };
 
 /* ---------- Connexion ---------- */
@@ -1009,8 +1016,7 @@ function drvMissionsHtml(l,act){
  const ord={en_cours:0,recupere:1,attribue:2};act.sort((a,b)=>ord[a.statut]-ord[b.statut]||(b.type==='express')-(a.type==='express')||a.createdAt-b.createdAt);
  return`<section class="drv-hello"><div><span class="small" style="opacity:.85">Bonjour,</span><h2>${esc(l.nom)}</h2></div>
   <div class="drv-kpis"><div><b>${act.length}</b><span>à livrer</span></div><div><b>${ok.length}</b><span>livrés auj.</span></div><div><b>${cash>=1000?NF.format(Math.round(cash/1000))+'k':NF.format(cash)}</b><span>FCFA encaissés</span></div></div></section>
-  ${gpsCardHtml(l)}
-  ${l.statut!=='disponible'?`<div class="banner">${ic('alert',16)}<span>Vous êtes « Hors service » : l'agence ne vous attribue pas de nouveaux colis. <button class="lnk" id="dvGoAvail" style="font-family:var(--f-body)">Passer en service</button></span></div>`:''}
+  ${dutyCardHtml(l)}
   <div class="row between"><b style="font-family:var(--f-display);font-size:16px">Mes colis (${act.length})</b><span class="small muted">${charge(l)}/${capOf(l)} colis actifs</span></div>
   ${act.length?act.map(drvMissionCard).join(''):`<div class="empty card">${ic('check',30)}<b style="color:var(--fg)">Aucune mission en cours</b><br>Les colis que l'agence vous attribue apparaîtront ici.</div>`}`}
 function drvDetailHtml(c){
@@ -1039,25 +1045,14 @@ function drvHistoryHtml(l){
    return sep+`<button class="hitem" data-detail="${c.code}">${c.preuve&&c.preuve.img?`<img src="${c.preuve.img}" alt="">`:`<span class="dot d-${c.statut==='livre'?'livre':c.statut==='echec'?'echec':'probleme'}" style="width:44px;height:44px;border-radius:10px">${ic(c.statut==='livre'?'check':'alert',18)}</span>`}<span style="flex:1;min-width:0"><span class="row between"><b class="mono" style="font-size:13px">${c.code}</b><span class="small muted">${hm(lastT(c))}</span></span><span class="small" style="display:block">${esc(c.dest.nom)} · ${esc(c.zone)}</span><span class="row" style="gap:6px;margin-top:4px">${badge(c.statut)}${c.motif&&c.statut!=='livre'?`<span class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.motif)}</span>`:''}</span></span></button>`}).join(''):`<div class="empty card">${ic('clock',28)}Aucune mission dans cette catégorie.</div>`}`}
 function drvProfileHtml(l){
  return`<div class="mcard" style="align-items:center;text-align:center">${av(l,72)}<div><b style="font-size:18px;font-family:var(--f-display)">${esc(l.nom)}</b><div class="muted num">${esc(l.tel)}</div></div>${lstate(l)}</div>
-  <div class="mcard"><b class="small" style="text-transform:uppercase;letter-spacing:.1em;color:var(--faint)">Ma disponibilité</b>
-   <div class="seg" role="radiogroup" aria-label="Disponibilité">${['disponible','hors_service'].map(k=>`<button role="radio" aria-checked="${l.statut===k}" class="${l.statut===k?'on':''}" data-av="${k}">${LST[k].l}</button>`).join('')}</div>
-   <p class="small muted" style="margin:0">${l.statut==='disponible'?'L\'agence peut vous attribuer de nouveaux colis.':'Aucun nouveau colis ne vous sera attribué. Vos colis en cours restent dans vos missions.'}</p></div>
+  ${dutyCardHtml(l,true)}
   <div class="mcard"><dl class="kv small"><dt>Téléphone</dt><dd class="num">${esc(l.tel)}</dd><dt>Véhicule</dt><dd>${esc(l.vehicule)}</dd><dt>Plaque</dt><dd><span class="plate">${esc(l.plaque)}</span></dd><dt>Zone principale</dt><dd>${esc(l.zone||'—')}</dd><dt>Capacité</dt><dd>${charge(l)} / ${capOf(l)} colis actifs (${vehicleKind(l.vehicule)})</dd>${l.note?`<dt>Note clients</dt><dd>${String(l.note).replace('.',',')} / 5</dd>`:''}${l.depuis?`<dt>Livreur depuis</dt><dd>${esc(l.depuis)}</dd>`:''}</dl></div>
-  ${gpsCardHtml(l,true)}
   <button class="bigbtn" id="dvLogout">${ic('x',18)}${isDriver()?'Se déconnecter':'Quitter l\'aperçu'}</button>`}
 
 /* ---------- Feuilles d'action ---------- */
 function drvSheetHtml(){
+ if(drvSheet.k==='gpshelp')return gpsHelpHtml(drvSheet.reason);
  const c=CO(drvSheet.code);if(!c)return'';const k=drvSheet.k;
- if(k==='share')return`<div class="drv-sheet-bg" data-close></div><div class="drv-sheet" role="dialog" aria-label="Partager votre position"><span class="grab"></span>
-  <div class="row" style="gap:12px"><span class="dot d-livre" style="width:44px;height:44px;border-radius:12px">${ic('pin',22)}</span><div><h3>Partager votre position ?</h3><p class="small muted" style="margin:2px 0 0">${c.code} · ${esc(c.dest.nom)} · ${esc(zoneLabel(c))}</p></div></div>
-  <p class="small" style="margin:0;line-height:1.5">Pendant cette livraison, FAST EXPRESS suit votre trajet jusqu'au client, pour que l'agence et le client voient votre arrivée. Le partage s'arrête quand vous passez hors service.</p>
-  <p class="small muted" style="margin:0">Votre téléphone va vous demander l'autorisation : touchez « Autoriser ».</p>
-  <div class="errbox" id="dsErr" hidden></div>
-  <button class="bigbtn pri" id="shareYes">${ic('pin',18)}Partager ma position et démarrer</button>
-  <button class="bigbtn" id="shareNo">Démarrer sans partager</button>
-  <button class="btn ghost" data-close style="align-self:center">Annuler</button></div>`;
- if(k==='avail'){const l=me();return`<div class="drv-sheet-bg" data-close></div><div class="drv-sheet"><span class="grab"></span><h3>Ma disponibilité</h3><div class="seg">${['disponible','hors_service'].map(x=>`<button class="${l.statut===x?'on':''}" data-av="${x}">${LST[x].l}</button>`).join('')}</div><button class="bigbtn" data-close>Fermer</button></div>`}
  if(k==='confirm')return`<div class="drv-sheet-bg" data-close></div><div class="drv-sheet" role="dialog" aria-label="Confirmer la livraison"><span class="grab"></span>
   <h3>Confirmer la livraison</h3><p class="small muted" style="margin:0">${c.code} · ${esc(c.dest.nom)}. Demandez le code à 4 chiffres reçu par le client sur WhatsApp.</p>
   <input class="input otp-in" id="dsOtp" inputmode="numeric" maxlength="4" placeholder="••••" aria-label="Code de livraison" autocomplete="one-time-code">
@@ -1082,18 +1077,6 @@ function drvSheetHtml(){
 function drvAct(fn){if(drvBusy)return;drvBusy=true;try{fn()}finally{drvBusy=false}}
 const gpsOpts=()=>GPS.last?{lat:GPS.last.coords.latitude,lng:GPS.last.coords.longitude}:{};
 function drvPick(code){drvAct(()=>{const c=myColis(code);if(!c)return;if(c.statut!=='attribue'){R.livreur();return}const l=me();setStatus(c,'recupere',null,l.nom,gpsOpts());toast(`${c.code} : colis récupéré`);waToast(c,'recupere');R.livreur()})}
-/* Demande de position à chaque début de livraison : le navigateur affiche sa propre autorisation */
-function drvShareAndStart(code,btn){
- const l=me();if(!l)return;
- const go=(msg,kind)=>{drvSheet=null;drvStart(code);if(msg)toast(msg,kind)};
- if(!('geolocation' in navigator))return go('Ce téléphone ne permet pas la localisation : livraison démarrée sans position','warn');
- btn.disabled=true;btn.innerHTML='Recherche de votre position…';
- if(!l.consentAt){l.consentAt=Date.now();log('livreur','',`${l.nom} a accepté le partage de sa position`,l.nom);save();remote('consent',l)}
- navigator.geolocation.getCurrentPosition(p=>{GPS.last=p;GPS.err='';GPS.lastSent=0;go('Position partagée pendant la livraison');if(gpsWanted()){gpsStart();gpsSend()}},
-  e=>{GPS.err=e.code===1?'Localisation refusée : autorisez-la dans les réglages du navigateur':'Position introuvable pour le moment';
-   go(e.code===1?'Localisation refusée : livraison démarrée sans position. Autorisez-la dans les réglages du navigateur.':'Position introuvable : livraison démarrée, nouvel essai automatique','warn')},
-  {enableHighAccuracy:true,timeout:15000,maximumAge:30000});
-}
 function drvStart(code){drvAct(()=>{const c=myColis(code);if(!c)return;if(c.statut!=='recupere'){R.livreur();return}const l=me();setStatus(c,'en_cours',null,l.nom,gpsOpts());toast(`${c.code} : livraison commencée`);waToast(c,'en_cours');R.livreur()})}
 function drvConfirm(){drvAct(()=>{
  const c=myColis(drvSheet.code);if(!c)return;const er=$('#dsErr');const l=me();
@@ -1117,31 +1100,27 @@ function drvIssue(){drvAct(()=>{
  const motif=sel==='autre'?autre:sel;
  if(t==='reporte')setStatus(c,'reporte',motif,l.nom,{creneau:$('#dsCren').value,...gpsOpts()});else setStatus(c,t,motif,l.nom,gpsOpts());
  drvSheet=null;drvDetail=null;toast(`${c.code} ${t==='reporte'?'reporté':t==='echec'?'en échec':'annulé'} · motif enregistré`);waToast(c,t);R.livreur()})}
-function drvSetAvail(v){const l=me();if(!l||!LST[v]||l.statut===v){drvSheet=null;R.livreur();return}const old=l.statut;l.statut=v;log('livreur','',`${l.nom} : ${LST[old].l} → ${LST[v].l} (depuis l'espace livreur)`,l.nom);save();remote('duty',l);drvSheet=null;toast(`Vous êtes maintenant « ${LST[v].l} »${v==='hors_service'?' · partage de position arrêté':''}`);R.livreur()}
 
 function drvBind(){
  const root=$('#drv');const q=sel=>root.querySelectorAll(sel);
  const adm=()=>go('tableau');['#dvAdmin'].forEach(id=>{const b=root.querySelector(id);if(b)b.onclick=adm});
  q('[data-pick]').forEach(b=>b.onclick=()=>{b.disabled=true;drvPick(b.dataset.pick)});
- const gc=root.querySelector('#gpsOk');if(gc)gc.onclick=()=>{const l=me();l.consentAt=Date.now();log('livreur','',`${l.nom} a accepté le partage de sa position`,l.nom);save();remote('consent',l);toast('Merci : votre position sera partagée pendant vos heures de service');R.livreur()};
- const gw=root.querySelector('#gpsOff');if(gw)gw.onclick=()=>{const l=me();l.consentAt=null;gpsStop();log('livreur','',`${l.nom} a retiré son accord de partage de position`,l.nom);save();remote('consent',l);toast('Partage de position désactivé');R.livreur()};
- const gn=root.querySelector('#gpsNow');if(gn)gn.onclick=()=>{GPS.lastSent=0;if(GPS.last)gpsSend();else toast('Position en cours d\'acquisition…')};
  const bk=root.querySelector('#dvBack');if(bk)bk.onclick=()=>{drvDetail=null;R.livreur()};
  q('[data-dtab]').forEach(b=>b.onclick=()=>{drvTab=b.dataset.dtab;drvDetail=null;drvSheet=null;R.livreur();root.querySelector('.drv-body').scrollTop=0});
  q('[data-detail]').forEach(b=>b.onclick=()=>{drvDetail=b.dataset.detail;R.livreur();root.querySelector('.drv-body').scrollTop=0});
- q('[data-start]').forEach(b=>b.onclick=()=>{if(!myColis(b.dataset.start))return;drvSheet={k:'share',code:b.dataset.start};R.livreur()});
+ q('[data-start]').forEach(b=>b.onclick=()=>{b.disabled=true;drvStart(b.dataset.start)});
  q('[data-confirm]').forEach(b=>b.onclick=()=>{if(!myColis(b.dataset.confirm))return;drvSheet={k:'confirm',code:b.dataset.confirm};drvPhoto=null;R.livreur()});
  q('[data-issue]').forEach(b=>b.onclick=()=>{if(!myColis(b.dataset.issue))return;drvSheet={k:'issue',code:b.dataset.issue,type:'reporte'};R.livreur()});
  q('[data-hf]').forEach(b=>b.onclick=()=>{drvHistF=b.dataset.hf;R.livreur()});
- q('[data-av]').forEach(b=>b.onclick=()=>drvSetAvail(b.dataset.av));
  q('[data-copy]').forEach(b=>b.onclick=()=>{const v=b.dataset.copy;navigator.clipboard?.writeText(v).then(()=>toast('Numéro copié'),()=>toast('Sélectionnez le numéro pour le copier','warn'))});
- const av0=root.querySelector('#dvAvail');if(av0)av0.onclick=()=>{drvSheet={k:'avail',code:(mine()[0]||S.colis[0]).code};R.livreur()};
- const ga=root.querySelector('#dvGoAvail');if(ga)ga.onclick=()=>drvSetAvail('disponible');
+ const av0=root.querySelector('#dvAvail');if(av0)av0.onclick=()=>{drvTab='profil';drvDetail=null;drvSheet=null;R.livreur()};
+ const don=root.querySelector('#dutyOn');if(don)don.onclick=()=>goOnDuty();
+ const dof=root.querySelector('#dutyOff');if(dof)dof.onclick=()=>goOffDuty();
+ const gcard=root.querySelector('#gpsCard');if(gcard)gpsBindCard(gcard);
+ const gr=root.querySelector('#gpsRetry');if(gr)gr.onclick=()=>{drvSheet=null;goOnDuty()};
  const lo=root.querySelector('#dvLogout');if(lo)lo.onclick=()=>drvLogout(false);
  q('[data-close]').forEach(b=>b.onclick=()=>{drvSheet=null;drvPhoto=null;R.livreur()});
  if(!drvSheet)return;
- const sy=root.querySelector('#shareYes');if(sy)sy.onclick=()=>drvShareAndStart(drvSheet.code,sy);
- const sn=root.querySelector('#shareNo');if(sn)sn.onclick=()=>{const code=drvSheet.code;drvSheet=null;const l=me();log('livreur',code,`${l.nom} a démarré sans partager sa position`,l.nom);drvStart(code)};
  const ok=root.querySelector('#dsOk');if(ok){ok.onclick=drvConfirm;const o=$('#dsOtp');o.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();drvConfirm()}});}
  const ph=root.querySelector('#dsPhoto');if(ph)ph.onchange=async()=>{const f=ph.files[0];const er=$('#dsErr');const otp=$('#dsOtp')?.value||'',cash=$('#dsCash')?.checked;
   try{drvPhoto=await compressImage(f);R.livreur();if($('#dsOtp'))$('#dsOtp').value=otp;if($('#dsCash'))$('#dsCash').checked=!!cash}
@@ -1153,38 +1132,207 @@ function drvBind(){
  const is=root.querySelector('#dsIssue');if(is)is.onclick=drvIssue;
 }
 
-/* ---------- Partage de la position GPS du livreur ----------
-   Uniquement : livreur connecté, « En service », après son accord (drivers.consent_at).
-   La position est lue en continu par le téléphone et envoyée au plus toutes les 2 minutes (driver_locations). */
+/* ---------- Partage de la position GPS du livreur : OBLIGATOIRE pendant le service ----------
+   - Passer en service exige l'autorisation de géolocalisation ET une première position réelle.
+   - Pendant le service : position lue en continu, envoyée toutes les 2 minutes (driver_locations).
+   - Fin de service ou déconnexion : GPS arrêté et drivers.is_on_duty = false.
+   - Version web : le navigateur suspend la localisation quand l'application passe en arrière-plan
+     ou que l'écran se verrouille. Ce n'est PAS un suivi garanti en arrière-plan (voir docs/ANDROID.md). */
 const GPS_MS=CFG.gpsIntervalMs||120000;
-const GPS={watch:null,timer:null,last:null,lastSent:0,sentAt:null,err:'',far:false};
-const gpsWanted=()=>{const l=me();return!!(l&&isDriver()&&onDuty(l)&&l.consentAt)};
+const POS_FRESH=(CFG.gpsFreshMin||3)*MIN,POS_STALE=(CFG.gpsStaleMin||10)*MIN;
+const REQ_TIMEOUT=CFG.gpsRequestTimeoutMs||15000;
+const GPS={watch:null,timer:null,last:null,lastSent:0,sentAt:null,err:'',far:false,starting:false,checking:false,hiddenAt:null,suspended:null,awake:''};
+let dutyBusy=false;
+const gpsWanted=()=>{const l=me();return!!(l&&onDuty(l)&&(isDriver()||(MODE==='demo'&&drvPreview)))};
 function gpsStart(){
- if(GPS.watch!=null)return;
- if(!('geolocation' in navigator)){GPS.err='Ce téléphone ne permet pas la localisation';return}
- GPS.watch=navigator.geolocation.watchPosition(p=>{GPS.last=p;GPS.err='';if(Date.now()-GPS.lastSent>=GPS_MS)gpsSend()},
-  e=>{GPS.err=e.code===1?'Localisation refusée : autorisez-la dans les réglages du navigateur':'Position introuvable pour le moment';gpsPaint()},
-  {enableHighAccuracy:true,maximumAge:30000,timeout:45000});
- GPS.timer=setInterval(()=>{if(GPS.last&&Date.now()-GPS.lastSent>=GPS_MS-1000)gpsSend()},15000);
+ if(GPS.watch!=null||GPS.starting)return;GPS.starting=true;
+ FEGeo.watch(p=>{GPS.last=p;GPS.err='';if(Date.now()-GPS.lastSent>=GPS_MS)gpsSend()},
+  e=>{if(e.code===1){gpsLost('denied');return}GPS.err=e.code===3?'Position introuvable pour le moment (signal GPS faible)':'Position indisponible : vérifiez que la localisation du téléphone est activée';gpsPaint()})
+  .then(h=>{GPS.starting=false;if(gpsWanted())GPS.watch=h;else FEGeo.clear(h)}).catch(()=>{GPS.starting=false});
+ clearInterval(GPS.timer);
+ GPS.timer=setInterval(()=>{if(!gpsWanted())return;
+  if(GPS.last&&Date.now()-GPS.lastSent>=GPS_MS-1000)gpsSend();
+  if(document.visibilityState==='visible'&&GPS.sentAt&&Date.now()-GPS.sentAt>GPS_MS*1.75&&!GPS.err){GPS.err=`Aucune position envoyée depuis ${Math.round((Date.now()-GPS.sentAt)/60000)} min : vérifiez le GPS et la connexion Internet`;gpsPaint()}
+ },15000);
+ FEGeo.keepAwake().then(s=>{GPS.awake=s;gpsPaint()});
 }
-function gpsStop(){if(GPS.watch!=null&&navigator.geolocation)navigator.geolocation.clearWatch(GPS.watch);GPS.watch=null;clearInterval(GPS.timer);GPS.timer=null;Object.assign(GPS,{last:null,lastSent:0,sentAt:null,err:'',far:false})}
+function gpsStop(){FEGeo.clear(GPS.watch);clearInterval(GPS.timer);FEGeo.release();Object.assign(GPS,{watch:null,timer:null,starting:false,checking:false,last:null,lastSent:0,sentAt:null,err:'',far:false,hiddenAt:null,suspended:null,awake:''})}
 async function gpsSend(){
  const l=me();if(!l||!GPS.last||!gpsWanted())return;GPS.lastSent=Date.now();
- const c=GPS.last.coords;let bat={};try{const b=navigator.getBattery?await navigator.getBattery():null;if(b)bat={level:Math.round(b.level*100),charging:b.charging}}catch(e){}
+ const c=GPS.last.coords;const bat=await FEGeo.battery();
  const fix={lat:c.latitude,lng:c.longitude,accuracy:Number.isFinite(c.accuracy)?Math.round(c.accuracy):null,speed:Number.isFinite(c.speed)?c.speed:null,heading:Number.isFinite(c.heading)?c.heading:null,battery_level:bat.level??null,is_charging:bat.charging??null,recorded_at:new Date(GPS.last.timestamp||Date.now()).toISOString()};
  const p=toXY(fix.lat,fix.lng);GPS.far=km(dist(p,HQ))>60;
  if(!GPS.far||MODE==='supabase'){l.pos=p;l.posAt=Date.now()}
- GPS.sentAt=Date.now();remote('location',l,fix);if(MODE==='demo')save();gpsPaint();
+ GPS.sentAt=Date.now();GPS.err='';remote('location',l,fix);if(MODE==='demo')save();gpsPaint();
 }
-function gpsCardHtml(l,full){
- if(!l||!isDriver()&&!full)return'';
- if(!l.consentAt)return`<div class="mcard" style="border-color:var(--gold)"><b>Partage de votre position</b><p class="small muted" style="margin:0">Pendant vos heures de service, FAST EXPRESS enregistre votre position toutes les 2 minutes pour organiser les livraisons et informer les clients de votre arrivée. Rien n'est enregistré hors service.</p><button class="bigbtn gold" id="gpsOk">J'accepte le partage de ma position</button></div>`;
- return`<div class="mcard" id="gpsCard">${gpsStatusHtml(l)}${full?`<button class="btn sm ghost" id="gpsOff" style="align-self:flex-start">Retirer mon accord</button>`:''}</div>`}
+/* Service déjà « En service » (session restaurée, données de démo) : on vérifie que la position fonctionne */
+async function ensureGps(){
+ if(GPS.watch||GPS.starting||GPS.checking||dutyBusy)return;GPS.checking=true;
+ try{if(await FEGeo.permission()==='denied')throw{code:1};
+  const p=await FEGeo.getCurrent({enableHighAccuracy:true,timeout:20000,maximumAge:60000});
+  if(!gpsWanted())return;GPS.last=p;const L0=me();if(L0&&!L0.consentAt){L0.consentAt=Date.now();remote('consent',L0)}gpsStart();gpsSend();RT.track()}
+ catch(e){if(!gpsWanted())return;if(e&&(e.code===1||e.code===0))gpsLost(e.code===1?'denied':'unsupported');else{GPS.err='Position introuvable : vérifiez que la localisation du téléphone est activée';gpsStart();gpsPaint()}}
+ finally{GPS.checking=false}
+}
+/* Passer en service : autorisation + première position réelle obligatoires */
+async function goOnDuty(){
+ const l=me();if(!l||onDuty(l)||dutyBusy)return;
+ if(!FEGeo.secureContext())return gpsHelp('insecure');
+ if(!FEGeo.available())return gpsHelp('unsupported');
+ dutyBusy=true;drvSheet=null;R.livreur();
+ try{
+  if(await FEGeo.permission()==='denied')throw{code:1};
+  const p=await FEGeo.getCurrent({enableHighAccuracy:true,timeout:20000,maximumAge:0});
+  if(me()!==l)return;
+  GPS.last=p;GPS.err='';
+  if(!l.consentAt){l.consentAt=Date.now();remote('consent',l)}   // date d'information du livreur
+  l.statut='disponible';DRVREQ=null;log('livreur','',`${l.nom} est passé en service (position partagée)`,l.nom);save();
+  await remote('duty',l);
+  gpsStart();await gpsSend();RT.track();
+  toast('Vous êtes en service · position partagée toutes les 2 minutes');
+ }catch(e){gpsHelp(e&&e.code===1?'denied':e&&e.code===0?'unsupported':e&&e.code===3?'timeout':'unavailable')}
+ finally{dutyBusy=false;if(cur==='livreur')R.livreur()}
+}
+/* Fin de service (bouton, déconnexion, autorisation retirée, ou décision de l'agence) */
+async function goOffDuty(msg){
+ const l=me();gpsStop();
+ if(l&&onDuty(l)){l.statut='hors_service';log('livreur','',`${l.nom} a terminé son service (partage de position arrêté)`,l.nom);save();RT.track();await remote('duty',l)}
+ if(msg!==false)toast(msg||'Service terminé · partage de position arrêté');
+ if(cur==='livreur'&&AUTH)R.livreur();
+}
+function gpsLost(reason){goOffDuty(reason==='denied'?'Géolocalisation désactivée : vous êtes passé hors service':'Localisation impossible : vous êtes passé hors service').then(()=>gpsHelp(reason))}
+function gpsHelp(reason){drvSheet={k:'gpshelp',reason};if(cur==='livreur'&&AUTH)R.livreur()}
+/* Retour au premier plan : le navigateur a peut-être suspendu la localisation */
+document.addEventListener('visibilitychange',()=>{
+ if(!gpsWanted())return;
+ if(document.visibilityState==='hidden'){GPS.hiddenAt=Date.now();return}
+ const h=GPS.hiddenAt;GPS.hiddenAt=null;FEGeo.resume().then(s=>{if(s){GPS.awake=s;gpsPaint()}});
+ if(h&&Date.now()-h>60000&&!FEGeo.backgroundCapable)GPS.suspended={from:h,to:Date.now()};
+ FEGeo.getCurrent({enableHighAccuracy:true,timeout:15000,maximumAge:30000}).then(p=>{GPS.last=p;GPS.lastSent=0;gpsSend()}).catch(e=>{if(e&&e.code===1)gpsLost('denied')});
+ if(cur==='livreur'&&!drvSheet)R.livreur();else gpsPaint();
+});
+if(window.FEGeo)FEGeo.onPermissionChange(st=>{if(st==='denied'&&gpsWanted())gpsLost('denied')});
+
+/* Carte d'état du service, côté livreur (missions et profil) */
+function dutyCardHtml(l,full){
+ if(!l)return'';
+ if(!onDuty(l))return`<div class="mcard duty-off">
+  <b style="font-size:15px">Vous êtes hors service</b>
+  <p class="small" style="margin:0;line-height:1.5">Pour recevoir des livraisons, passez en service. <b>Le partage de votre position est obligatoire pendant le service</b> : elle est envoyée à FAST EXPRESS toutes les 2 minutes, et n'est plus partagée dès que vous terminez votre service ou vous déconnectez.</p>
+  ${DRVREQ?`<div class="banner">${ic('pin',16)}<span>L'agence a demandé votre position à ${hm(DRVREQ.at)} : passez en service pour la partager.</span></div>`:''}
+  <button class="bigbtn pri" id="dutyOn" ${dutyBusy?'disabled':''}>${ic('pin',18)}${dutyBusy?'Recherche de votre position…':'Passer en service'}</button>
+  <p class="small muted" style="margin:0">Votre téléphone va demander l'autorisation de localisation : touchez « Autoriser ».</p></div>`;
+ return`<div class="mcard" id="gpsCard">${gpsStatusHtml(l)}</div>${full?`<button class="bigbtn" id="dutyOff">${ic('x',18)}Terminer mon service</button>`:''}`}
 function gpsStatusHtml(l){
- const on=gpsWanted()&&GPS.watch!=null;
- const txt=!isDriver()?'Aperçu : le partage de position fonctionne sur le téléphone du livreur.':!onDuty(l)?'Hors service : position non partagée.':GPS.err?GPS.err:GPS.sentAt?`Position envoyée à ${hm(GPS.sentAt)}${GPS.last?.coords?.accuracy?` · précision ${Math.round(GPS.last.coords.accuracy)} m`:''}${GPS.far&&MODE==='demo'?' · hors de Libreville (non affichée sur la carte de démo)':''}`:'Recherche de votre position…';
- return`<div class="row between" style="gap:10px"><span class="row" style="gap:8px"><i style="width:9px;height:9px;border-radius:50%;background:${on&&!GPS.err?'var(--ok)':'var(--faint)'}"></i><b class="small">Partage de position ${on&&!GPS.err?'actif':'inactif'}</b></span>${on?`<button class="btn sm" id="gpsNow">Envoyer maintenant</button>`:''}</div><p class="small muted" style="margin:0">${esc(txt)} · toutes les ${Math.round(GPS_MS/60000)} min</p>`}
-function gpsPaint(){const el=document.getElementById('gpsCard');const l=me();if(el&&l){el.innerHTML=gpsStatusHtml(l);const gn=el.querySelector('#gpsNow');if(gn)gn.onclick=()=>{GPS.lastSent=0;if(GPS.last)gpsSend()}}}
+ const on=gpsWanted()&&(GPS.watch!=null||GPS.starting);const okSend=on&&!GPS.err&&GPS.sentAt;
+ const txt=GPS.err?GPS.err:GPS.sentAt?`Position envoyée à ${hm(GPS.sentAt)}${GPS.last?.coords?.accuracy?` · précision ${Math.round(GPS.last.coords.accuracy)} m`:''}${GPS.far&&MODE==='demo'?' · hors de Libreville (non affichée sur la carte de démo)':''}`:'Recherche de votre position…';
+ const awake=GPS.awake==='on'?'Écran maintenu allumé pendant le service.':GPS.awake==='native'?'':GPS.awake?'Impossible de garder l\'écran allumé automatiquement : ne verrouillez pas le téléphone.':'';
+ return`<div class="row between" style="gap:10px"><span class="row" style="gap:8px"><i style="width:9px;height:9px;border-radius:50%;background:${okSend?'var(--ok)':'var(--warn)'}"></i><b class="small">En service · ${okSend?'position partagée':'position non envoyée'}</b></span>${on?`<button class="btn sm" id="gpsNow">Envoyer maintenant</button>`:''}</div>
+  <p class="small muted" style="margin:0">${esc(txt)} · toutes les ${Math.round(GPS_MS/60000)} min</p>
+  ${GPS.suspended?`<div class="banner" style="background:var(--warn-soft);color:var(--warn)">${ic('alert',16)}<span>Le navigateur a suspendu la localisation pendant ${Math.max(1,Math.round((GPS.suspended.to-GPS.suspended.from)/60000))} min (de ${hm(GPS.suspended.from)} à ${hm(GPS.suspended.to)}) : votre position n'a pas été envoyée pendant ce temps. <button class="lnk" id="gpsSusOk" style="font-family:var(--f-body)">Compris</button></span></div>`:''}
+  ${FEGeo.backgroundCapable?'':`<p class="small" style="margin:0;color:var(--warn)">${ic('alert',13).replace('class="ic"','class="ic" style="display:inline;vertical-align:-2px"')} Version web : gardez FAST EXPRESS ouvert et l'écran allumé. Si le téléphone se verrouille ou si vous changez d'application, le navigateur suspend la localisation et votre position n'est plus envoyée.</p>`}
+  ${awake?`<p class="small muted" style="margin:0">${awake}</p>`:''}`}
+function gpsPaint(){const el=document.getElementById('gpsCard');const l=me();if(el&&l&&onDuty(l)){el.innerHTML=gpsStatusHtml(l);gpsBindCard(el)}}
+function gpsBindCard(el){const gn=el.querySelector('#gpsNow');if(gn)gn.onclick=()=>{GPS.lastSent=0;if(GPS.last)gpsSend();else ensureGps()};const so=el.querySelector('#gpsSusOk');if(so)so.onclick=()=>{GPS.suspended=null;gpsPaint()}}
+/* Aide pour autoriser la géolocalisation (aucun bouton « Refuser » : le livreur reste hors service tant qu'elle n'est pas active) */
+function gpsHelpHtml(reason){
+ const T={denied:'Autorisez la localisation',unavailable:'Activez la localisation du téléphone',timeout:'Position introuvable',unsupported:'Localisation non disponible',insecure:'Adresse non sécurisée'}[reason]||'Localisation';
+ const steps=reason==='denied'?(FEGeo.isNative?['Ouvrez Paramètres › Applications › FAST EXPRESS › Autorisations › Position.','Choisissez « Toujours autoriser » (nécessaire pour le suivi pendant le service).','Revenez dans FAST EXPRESS et touchez « Réessayer ».']:
+   ['Dans Chrome, touchez le cadenas (ou ⓘ) à gauche de l\'adresse, puis Autorisations › Position › Autoriser.','Si rien ne change : Chrome ⋮ › Paramètres › Paramètres des sites › Position, et autorisez ce site.','Vérifiez aussi Android : Paramètres › Applications › Chrome › Autorisations › Position › « Autoriser seulement si l\'appli est en cours d\'utilisation ».','Revenez ici et touchez « Réessayer ».'])
+  :reason==='unsupported'?['Ce navigateur ne permet pas la localisation. Ouvrez FAST EXPRESS avec Google Chrome.']
+  :reason==='insecure'?['La localisation exige une adresse sécurisée (https). Ouvrez FAST EXPRESS depuis son adresse officielle.']
+  :['Tirez le volet du haut de l\'écran et activez « Localisation » (ou Paramètres › Localisation › Activé).','Choisissez le mode « Haute précision » si votre téléphone le propose.','Placez-vous à l\'extérieur ou près d\'une fenêtre, puis touchez « Réessayer ».'];
+ return`<div class="drv-sheet-bg" data-close></div><div class="drv-sheet" role="dialog" aria-label="${esc(T)}"><span class="grab"></span>
+  <div class="row" style="gap:12px"><span class="dot d-echec" style="width:44px;height:44px;border-radius:12px">${ic('pin',22)}</span><div><h3>${T}</h3><p class="small muted" style="margin:2px 0 0">Le partage de position est obligatoire pour passer en service.</p></div></div>
+  <ol class="small" style="margin:0;padding-left:18px;line-height:1.6">${steps.map(s=>`<li>${esc(s)}</li>`).join('')}</ol>
+  <button class="bigbtn pri" id="gpsRetry">${ic('refresh',18)}Réessayer</button>
+  <button class="btn ghost" data-close style="align-self:center">Fermer (vous restez hors service)</button></div>`}
+
+/* ---------- Demandes de position (Broadcast) ----------
+   Supabase : Realtime Broadcast + présence. Démo : canal entre onglets du même navigateur
+   et livreurs simulés. Une demande n'est « reçue » que si l'application du livreur répond. */
+const RT={status:'off',online:{},seen:{},bus:null,wait:{},hb:null};
+const GPSREQ={};      // driverId → dernier résultat de demande
+let DRVREQ=null;      // demande reçue par le livreur connecté sur cet appareil
+const rtPresence=()=>{const l=me();return{onDuty:!!(l&&onDuty(l))}};
+function rtJoin(){
+ RT.online={};RT.seen={};
+ if(MODE==='supabase'){if(!window.FEDB||!AUTH)return;RT.status='connecting';
+  window.FEDB.gpsJoin({onRequest:onGpsRequest,presence:rtPresence,
+   onPresence:ids=>{RT.online=ids;rtRefresh()},onStatus:s=>{RT.status=s;rtRefresh()}});return}
+ try{RT.bus=RT.bus||new BroadcastChannel('fast-express-gps-demo')}catch(e){RT.bus=null}
+ RT.status='ready';
+ if(RT.bus)RT.bus.onmessage=({data:m})=>{if(!m||!AUTH)return;
+  if(m.t==='req'&&isDriver()&&AUTH.driverId===m.driverId)onGpsRequest(m);
+  else if(m.t==='ack'){const w=RT.wait[m.reqId];if(w){clearTimeout(w.t);delete RT.wait[m.reqId];w.res(Object.assign({received:true},m))}}
+  else if(m.t==='presence'){RT.seen[m.driverId]={at:Date.now(),onDuty:m.onDuty};rtRefresh()}
+  else if(m.t==='hello'&&isDriver())rtPresenceSend()};
+ if(RT.bus)RT.bus.postMessage({t:'hello'});
+ clearInterval(RT.hb);RT.hb=setInterval(()=>{if(isDriver())rtPresenceSend()},10000);
+ if(isDriver())rtPresenceSend();
+}
+function rtPresenceSend(){if(RT.bus&&AUTH&&AUTH.driverId)RT.bus.postMessage({t:'presence',driverId:AUTH.driverId,...rtPresence()})}
+RT.track=()=>{if(MODE==='supabase'){if(window.FEDB)window.FEDB.gpsTrack(rtPresence())}else rtPresenceSend()};
+function rtLeave(){clearInterval(RT.hb);RT.hb=null;if(MODE==='supabase'&&window.FEDB)window.FEDB.gpsLeave();RT.status='off';RT.online={};RT.seen={}}
+/* L'application du livreur est-elle ouverte en ce moment ? */
+function isOnline(l){
+ if(MODE==='supabase')return!!RT.online[l.id];
+ const s=RT.seen[l.id];if(s&&Date.now()-s.at<25000)return true;
+ return onDuty(l)&&!l.offline;                    // livreurs simulés de la démo
+}
+function reqLabel(r){
+ if(!r)return'';
+ if(r.received){const at=r.at?(typeof r.at==='number'?r.at:Date.parse(r.at)):Date.now();
+  return r.state==='sent'?`Reçue · position envoyée à ${hm(at)}`:r.state==='off_duty'?'Reçue · livreur hors service : il doit passer en service':r.state==='no_permission'?'Reçue · géolocalisation non autorisée sur son téléphone':'Reçue · position introuvable sur son téléphone'}
+ return r.state==='no_answer'?'Non reçue : l\'application du livreur n\'est pas ouverte ou il est hors ligne':'Envoi impossible : temps réel indisponible'}
+async function requestPosition(l){
+ if(!l||!isMgr()||(GPSREQ[l.id]&&GPSREQ[l.id].pending))return;
+ GPSREQ[l.id]={pending:true,at:Date.now()};rtRefresh();
+ const r=MODE==='supabase'?await window.FEDB.gpsRequest(l.id,me0(),REQ_TIMEOUT):await demoRequest(l);
+ GPSREQ[l.id]=Object.assign({pending:false,at:Date.now()},r);
+ log('livreur','',`Demande de position à ${l.nom} : ${reqLabel(r)}`,me0());save();
+ toast(`${esc(l.nom)} · ${esc(reqLabel(r))}`,r.received&&r.state==='sent'?'':'warn');rtRefresh();
+}
+function demoRequest(l){
+ return new Promise(res=>{
+  const reqId=uuid();RT.wait[reqId]={res,t:setTimeout(()=>{delete RT.wait[reqId];res({received:false,state:'no_answer'})},REQ_TIMEOUT)};
+  const real=RT.seen[l.id]&&Date.now()-RT.seen[l.id].at<25000;
+  if(real&&RT.bus){RT.bus.postMessage({t:'req',reqId,driverId:l.id,from:me0(),at:Date.now()});return}
+  if(onDuty(l)&&!l.offline)setTimeout(()=>{const w=RT.wait[reqId];if(!w)return;clearTimeout(w.t);delete RT.wait[reqId];l.posAt=Date.now();save();w.res({received:true,state:'sent',at:Date.now()})},1200);
+ });
+}
+/* Côté livreur : réponse automatique à une demande de l'agence */
+async function onGpsRequest(m){
+ const l=me();if(!l)return;
+ const ack=state=>{const p={reqId:m.reqId,driverId:l.id,state};if(MODE==='supabase')window.FEDB.gpsAck(p);else if(RT.bus)RT.bus.postMessage({t:'ack',at:Date.now(),...p})};
+ if(!onDuty(l)){DRVREQ={from:m.from,at:Date.now()};ack('off_duty');toast('L\'agence demande votre position : passez en service','warn');if(cur==='livreur'&&!drvSheet)R.livreur();return}
+ try{const p=await FEGeo.getCurrent({enableHighAccuracy:true,timeout:15000,maximumAge:15000});GPS.last=p;GPS.lastSent=0;await gpsSend();ack('sent');toast('Demande de l\'agence : position envoyée')}
+ catch(e){if(e&&e.code===1){ack('no_permission');gpsLost('denied')}else{ack('no_fix');GPS.err='Demande de l\'agence : position introuvable';gpsPaint()}}
+}
+/* Côté gestionnaire : état des positions */
+function posState(l){
+ if(!l.posAt||!l.pos)return{k:'lost',l:'Indisponible',d:'aucune position reçue'};
+ const age=Date.now()-l.posAt;
+ if(age<=POS_FRESH)return{k:'fresh',l:'À jour',d:ago(l.posAt)};
+ if(age<=POS_STALE)return{k:'old',l:'Ancienne',d:ago(l.posAt)};
+ return{k:'lost',l:'Indisponible',d:'dernière position '+ago(l.posAt)};
+}
+const posPill=l=>{const s=posState(l);return`<span class="pill ${s.k==='fresh'?'p-ok':s.k==='old'?'p-warn':'p-bad'}" title="${esc(s.d)}">Position ${s.l.toLowerCase()}</span>`};
+function reqHtml(l){
+ if(!isMgr())return'';const r=GPSREQ[l.id];const on=isOnline(l);
+ return`<div class="reqline"><span class="small row" style="gap:6px"><i class="dotc ${on?'on':''}"></i>${on?'Application ouverte':'Application fermée ou hors ligne'}</span>
+  ${r?`<span class="small ${r.pending?'muted':r.received?(r.state==='sent'?'t-ok':'t-warn'):'t-bad'}">${r.pending?'Demande envoyée, en attente de réponse…':esc(reqLabel(r))}</span>`:''}
+  <button class="btn sm" type="button" data-req="${l.id}" ${r&&r.pending?'disabled':''}>${ic('pin',14)}Demander la position</button></div>`}
+function bindReq(root){(root||document).querySelectorAll('[data-req]').forEach(b=>b.onclick=e=>{e.stopPropagation();requestPosition(LV(b.dataset.req))})}
+function rtRefresh(){
+ if(!AUTH||!isMgr()||modal.classList.contains('on'))return;
+ const a=document.activeElement;if(a&&/INPUT|TEXTAREA|SELECT/.test(a.tagName))return;
+ if(cur==='carte'){mapDraw();mapInfo()}else if(cur==='livreurs')R.livreurs();
+}
+/* Démo : les livreurs simulés en service envoient leur position toutes les 2 minutes */
+setInterval(()=>{if(MODE!=='demo'||!S)return;S.livreurs.forEach(l=>{if(onDuty(l)&&!l.offline&&!(RT.seen[l.id]&&Date.now()-RT.seen[l.id].at<25000))l.posAt=Date.now()});save()},GPS_MS);
+/* Les états « À jour / Ancienne / Indisponible » évoluent avec le temps */
+setInterval(()=>{if(AUTH&&isMgr())rtRefresh()},30000);
 
 /* ---------- Suivi public ---------- */
 let pubCode='',pubErr='',pubRemote=null;
@@ -1289,12 +1437,13 @@ async function doLogin(){
   if(MODE==='supabase'){const r=await window.FEDB.signIn(email,pass);if(r.error)throw new Error(r.error);
    try{await sbOpen(r.auth)}catch(e){await window.FEDB.signOut().catch(()=>{});AUTH=null;throw new Error('Connexion réussie, mais le chargement des données a échoué : '+(e.message||'erreur inconnue')+'. Vous avez été déconnecté.')}}
   else{const u=S.users.find(x=>x.email.toLowerCase()===email.toLowerCase());if(!u||pass!==DEMO_PASSWORD)throw new Error('E-mail ou mot de passe incorrect.');AUTH=authFromUser(u);try{localStorage.setItem(SKEY,u.id)}catch(e){}}
-  loginBusy=false;log('livreur','',`${AUTH.name} s'est connecté`,AUTH.name);save();toast(`Bienvenue ${esc(first(AUTH.name))}`);
+  loginBusy=false;log('livreur','',`${AUTH.name} s'est connecté`,AUTH.name);save();rtJoin();toast(`Bienvenue ${esc(first(AUTH.name))}`);
   const want=pendingHash;pendingHash=null;location.hash=isDriver()?'livreur':want||(isPartner()?'partenaire':'tableau');route();
  }catch(e){loginBusy=false;loginErr=e.message||'Connexion impossible.';renderLogin();$('#lg1').value=email}
 }
 async function logout(){
- gpsStop();drvPreview=null;drvId=null;AUTH=null;loginErr='';pendingHash=null;
+ {const l=me();if(l&&onDuty(l)&&(isDriver()||drvPreview)){try{await goOffDuty(false)}catch(e){}}}
+ rtLeave();gpsStop();drvPreview=null;drvId=null;AUTH=null;loginErr='';pendingHash=null;
  if(MODE==='supabase'&&window.FEDB)await window.FEDB.signOut().catch(()=>{});
  try{localStorage.removeItem(SKEY)}catch(e){}
  AUTH=null;closeAll();history.replaceState(null,'',location.pathname+modeQS());route();toast('Vous êtes déconnecté');
@@ -1358,12 +1507,13 @@ async function boot(){
   if(!window.FEDB||!window.FEDB.configured()){$('#login').hidden=false;$('#login').innerHTML=`<div class="login-card"><div class="stack" style="align-items:center;gap:10px">${logoHtml(80)}<h1>Configuration incomplète</h1><p class="sub">Le mode Supabase a besoin de l'adresse du projet et de la clé publique <b>sb_publishable_…</b> dans <b>js/config.js</b>${!CFG.supabaseAnonKey?' : la clé publique est encore vide':''}.</p><a class="btn" href="?mode=demo">Revenir à la démo</a></div></div>`;return}
   try{const a=await window.FEDB.restore();if(a)await sbOpen(a)}
   catch(e){console.error(e);AUTH=null;await window.FEDB.signOut().catch(()=>{});loginErr=(e.message||'Connexion impossible')+' · Reconnectez-vous.'}
-  window.FEDB.onAuth(ev=>{if(ev==='SIGNED_OUT'&&AUTH){gpsStop();AUTH=null;closeAll();loginErr='Votre session est terminée. Reconnectez-vous.';route()}});
+  window.FEDB.onAuth(ev=>{if(ev==='SIGNED_OUT'&&AUTH){gpsStop();rtLeave();AUTH=null;closeAll();loginErr='Votre session est terminée. Reconnectez-vous.';route()}});
  }else{
   S=load()||seed();save();
   try{const id=localStorage.getItem(SKEY);const u=id&&S.users.find(x=>x.id===id);if(u)AUTH=authFromUser(u)}catch(e){}
  }
  setSim(MODE==='demo'&&S.sim!==false);
+ if(AUTH)rtJoin();
  route();
 }
 boot();

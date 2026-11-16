@@ -58,6 +58,18 @@ L'adresse du projet est déjà dans `js/config.js`. Il reste à y mettre la **cl
 Rôles reconnus (`profiles.role`) : `manager`, `driver`, `partner` (affiché « Partenaire »).
 Un compte avec `is_active = false` est refusé.
 
+## 2 ter. Position des livreurs (obligatoire pendant le service)
+
+- Un livreur ne peut passer **en service** qu'après avoir autorisé la géolocalisation et obtenu une première position réelle.
+  Aucun bouton « Refuser » : sans position, il reste hors service, avec une aide pour autoriser la localisation.
+- Pendant le service, la position est envoyée toutes les 2 minutes (`driver_locations`).
+- « Terminer mon service » ou la déconnexion arrêtent le GPS et enregistrent `is_on_duty = false`.
+- Le gestionnaire peut **demander la position** (Supabase Realtime Broadcast). La demande n'est affichée « reçue »
+  que si l'application du livreur répond ; sinon « Non reçue ».
+- Carte : positions **À jour** (moins de 3 min), **Ancienne** (3 à 10 min), **Indisponible**.
+- **Version web : le suivi en arrière-plan n'est pas garanti.** Téléphone verrouillé ou application en arrière-plan :
+  le navigateur suspend la localisation (le livreur est averti). Voir `docs/ANDROID.md` pour l'application Android.
+
 ## 2 bis. Brancher votre projet Supabase (détails)
 
 > Rien n'est modifié dans votre base par cette étape : l'application **lit et écrit** dans vos tables existantes, selon vos règles RLS.

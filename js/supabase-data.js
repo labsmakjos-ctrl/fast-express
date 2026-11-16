@@ -122,7 +122,7 @@
     try { return await profileAuth(data.session.user); }
     catch (e) { await client().auth.signOut(); throw e; }
   }
-  async function signOut() { unsubscribe(); me = null; await client().auth.signOut(); }
+  async function signOut() { unsubscribe(); gpsLeave(); me = null; await client().auth.signOut(); }
   /* Suivi de la session Supabase : déconnexion dans un autre onglet, session expirée… */
   function onAuth(cb) { return client().auth.onAuthStateChange((event, session) => { try { cb(event, session); } catch (e) { console.error(e); } }); }
 
@@ -340,6 +340,62 @@
   }
   function unsubscribe() { if (channel) { client().removeChannel(channel); channel = null; } }
 
+  /* ---------- Demandes de position : Supabase Realtime Broadcast (aucune table) ----------
+     Le gestionnaire envoie « gps_request » ; l'application du livreur répond « gps_ack ».
+     L'accusé du serveur prouve seulement que le message est parti : la demande n'est
+     considérée comme reçue QUE si le livreur répond. Sans réponse : « non reçue ».
+     La présence indique quels livreurs ont l'application ouverte en ce moment. */
+  let gpsCh = null, gpsStatus = 'off';
+  const pending = {};
+  function gpsJoin(h) {
+    gpsLeave();
+    if (!me) return;
+    const key = me.driverId ? 'd:' + me.driverId : 'u:' + me.userId;
+    gpsStatus = 'connecting';
+    gpsCh = client().channel(CFG.gpsChannel || 'fast-express-gps', { config: { broadcast: { ack: true, self: false }, presence: { key } } });
+    gpsCh
+      .on('broadcast', { event: 'gps_request' }, ({ payload }) => { if (me && me.driverId && payload && payload.driverId === me.driverId && h.onRequest) h.onRequest(payload); })
+      .on('broadcast', { event: 'gps_ack' }, ({ payload }) => {
+        const w = payload && pending[payload.reqId];
+        if (w) { clearTimeout(w.t); delete pending[payload.reqId]; w.res(Object.assign({ received: true }, payload)); }
+        if (h.onAck) h.onAck(payload);
+      })
+      .on('presence', { event: 'sync' }, () => {
+        const ids = {}; const st = gpsCh ? gpsCh.presenceState() : {};
+        Object.values(st).forEach((list) => list.forEach((m) => { if (m.driverId) ids[m.driverId] = m; }));
+        if (h.onPresence) h.onPresence(ids);
+      })
+      .subscribe((status) => {
+        gpsStatus = status === 'SUBSCRIBED' ? 'ready' : status === 'CLOSED' ? 'off' : 'error';
+        if (h.onStatus) h.onStatus(gpsStatus, status);
+        if (status === 'SUBSCRIBED' && me && me.driverId && h.presence) gpsTrack(h.presence());
+      });
+  }
+  async function gpsTrack(state) {
+    if (gpsCh && gpsStatus === 'ready' && me && me.driverId) {
+      try { await gpsCh.track(Object.assign({ driverId: me.driverId, at: new Date().toISOString() }, state || {})); } catch (e) { /* présence non essentielle */ }
+    }
+  }
+  /* Résultat : { received:true, state:'sent'|'off_duty'|'no_permission'|'no_fix', at } | { received:false, state:'no_answer'|'unavailable'|'send_failed' } */
+  async function gpsRequest(driverId, from, timeoutMs) {
+    if (!gpsCh || gpsStatus !== 'ready') return { received: false, state: 'unavailable' };
+    const reqId = (typeof uuid === 'function' ? uuid() : String(Date.now()) + Math.random());
+    let r;
+    try { r = await gpsCh.send({ type: 'broadcast', event: 'gps_request', payload: { reqId, driverId, from, at: new Date().toISOString() } }); }
+    catch (e) { r = 'error'; }
+    if (r !== 'ok') return { received: false, state: 'send_failed', detail: String(r) };
+    return new Promise((res) => { pending[reqId] = { res, t: setTimeout(() => { delete pending[reqId]; res({ received: false, state: 'no_answer', reqId }); }, timeoutMs || 15000) }; });
+  }
+  async function gpsAck(payload) {
+    if (!gpsCh || gpsStatus !== 'ready') return 'unavailable';
+    try { return await gpsCh.send({ type: 'broadcast', event: 'gps_ack', payload: Object.assign({ at: new Date().toISOString() }, payload) }); } catch (e) { return 'error'; }
+  }
+  function gpsLeave() {
+    Object.keys(pending).forEach((k) => { clearTimeout(pending[k].t); pending[k].res({ received: false, state: 'unavailable' }); delete pending[k]; });
+    if (gpsCh) { try { gpsCh.untrack(); } catch (e) { /* ignoré */ } client().removeChannel(gpsCh); gpsCh = null; }
+    gpsStatus = 'off';
+  }
+
   /* ---------- Suivi public par tracking_token (fonction serveur à créer, voir README) ---------- */
   async function track(token) {
     if (!CFG.trackingRpc) return null;
@@ -348,6 +404,6 @@
     return mapParcel(row, row.events || [], [{ id: row.partner_id, company_name: row.partner_name || 'FAST EXPRESS', contact_phone: '' }], {});
   }
 
-  window.FEDB = { configured, signIn, signOut, restore, onAuth, loadAll, reload: loadAll, run, subscribe, unsubscribe, track,
+  window.FEDB = { configured, signIn, signOut, restore, onAuth, loadAll, gpsJoin, gpsTrack, gpsRequest, gpsAck, gpsLeave, gpsState: () => gpsStatus, reload: loadAll, run, subscribe, unsubscribe, track,
     _test: { appStatus, eventStatus, mapParcel, COLS } };
 })();
