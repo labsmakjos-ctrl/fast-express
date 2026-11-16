@@ -24,7 +24,7 @@
 
   /* Colonnes lues et écrites (noms réels) */
   const COLS = {
-    profiles: ['id', 'full_name', 'phone', 'role'],
+    profiles: ['id', 'full_name', 'phone', 'role', 'is_active'],
     partners: ['id', 'company_name', 'contact_name', 'contact_phone', 'profile_id'],
     drivers: ['id', 'profile_id', 'vehicle_type', 'vehicle_plate', 'zone', 'is_on_duty', 'consent_at'],
     driver_locations: ['driver_id', 'lat', 'lng', 'accuracy', 'speed', 'heading', 'battery_level', 'is_charging', 'recorded_at', 'created_at'],
@@ -81,19 +81,31 @@
     en_cours: 'En route vers le destinataire', livre: 'Colis livré', echec: 'Échec de livraison', reporte: 'Livraison reportée', annule: 'Colis annulé' };
 
   /* ---------- Connexion ---------- */
+  /* Une seule ligne attendue : message clair si aucune ou plusieurs (au lieu d'une erreur technique) */
+  async function one(query, ctx, none, many) {
+    const r = await query.limit(2);
+    if (r.error) { const e = new Error(ctx + ' : ' + r.error.message); e.details = r.error; throw e; }
+    if (!r.data.length) throw new Error(none);
+    if (r.data.length > 1) throw new Error(many);
+    return r.data[0];
+  }
   async function profileAuth(user) {
-    const prof = check(await client().from('profiles').select(COLS.profiles.join(',')).eq('id', user.id).maybeSingle(), 'Profil');
-    if (!prof) throw new Error("Aucun profil FAST EXPRESS n'est associé à ce compte (table profiles).");
-    if (!['manager', 'driver', 'partner'].includes(prof.role)) throw new Error('Rôle non pris en charge : ' + prof.role);
+    const prof = await one(client().from('profiles').select(COLS.profiles.join(',')).eq('id', user.id), 'Profil',
+      "Aucun profil FAST EXPRESS n'est associé à ce compte. Contactez FAST EXPRESS.",
+      'Plusieurs profils sont associés à ce compte. Contactez FAST EXPRESS.');
+    if (prof.is_active === false) throw new Error('Ce compte est désactivé. Contactez FAST EXPRESS.');
+    if (!['manager', 'driver', 'partner'].includes(prof.role)) throw new Error("Ce compte n'a pas de rôle reconnu (" + prof.role + '). Contactez FAST EXPRESS.');
     const a = { userId: user.id, role: prof.role, name: prof.full_name || user.email, phone: prof.phone, email: user.email };
     if (a.role === 'driver') {
-      const d = check(await client().from('drivers').select('id').eq('profile_id', user.id).maybeSingle(), 'Livreur');
-      if (!d) throw new Error("Ce compte livreur n'a pas de fiche dans la table drivers.");
+      const d = await one(client().from('drivers').select('id').eq('profile_id', user.id), 'Livreur',
+        "Ce compte livreur n'a pas de fiche livreur. Contactez FAST EXPRESS.",
+        'Plusieurs fiches livreur sont liées à ce compte. Contactez FAST EXPRESS.');
       a.driverId = d.id;
     }
     if (a.role === 'partner') {
-      const p = check(await client().from('partners').select('id').eq('profile_id', user.id).maybeSingle(), 'Partenaire');
-      if (!p) throw new Error("Ce compte partenaire n'a pas de fiche dans la table partners.");
+      const p = await one(client().from('partners').select('id').eq('profile_id', user.id), 'Partenaire',
+        "Ce compte Partenaire n'est lié à aucune entreprise. Contactez FAST EXPRESS.",
+        'Plusieurs entreprises sont liées à ce compte Partenaire. Contactez FAST EXPRESS.');
       a.partnerId = p.id;
     }
     me = a; return a;
@@ -111,6 +123,8 @@
     catch (e) { await client().auth.signOut(); throw e; }
   }
   async function signOut() { unsubscribe(); me = null; await client().auth.signOut(); }
+  /* Suivi de la session Supabase : déconnexion dans un autre onglet, session expirée… */
+  function onAuth(cb) { return client().auth.onAuthStateChange((event, session) => { try { cb(event, session); } catch (e) { console.error(e); } }); }
 
   /* ---------- Lecture et conversion vers le modèle de l'interface ---------- */
   function mapPartner(p) {
@@ -173,6 +187,10 @@
         console.warn('[FAST EXPRESS] parcel_events.' + EVT_CREATED + ' introuvable : historique sans date.');
         eventsHaveDate = false; i -= 100; continue;
       }
+      if (res.error && (res.error.code === '42501' || /permission denied/i.test(res.error.message || ''))) {
+        console.warn('[FAST EXPRESS] parcel_events non autorisée pour ce rôle : historique reconstitué à partir des statuts.');
+        return out;
+      }
       check(res, 'Historique').forEach((e) => { (out[e.parcel_id] = out[e.parcel_id] || []).push(e); });
     }
     return out;
@@ -185,18 +203,28 @@
     return out;
   }
 
+  /* Tables indispensables selon le rôle. Pour les autres, une lecture refusée par les règles RLS
+     (droit absent) est traitée comme « aucune ligne » au lieu de bloquer tout le chargement. */
+  const NEEDED = { manager: ['partners', 'drivers', 'parcels'], driver: ['drivers', 'parcels'], partner: ['partners', 'parcels'] };
+  async function read(table, query, ctx) {
+    const res = await query;
+    if (!res.error) return res.data || [];
+    const denied = res.error.code === '42501' || /permission denied/i.test(res.error.message || '');
+    if (denied && !(NEEDED[me && me.role] || []).includes(table)) { console.warn('[FAST EXPRESS] ' + table + ' non autorisée pour ce rôle : ignorée'); return []; }
+    return check(res, ctx);
+  }
   async function loadAll() {
     const db = client();
-    const partners = check(await db.from('partners').select(COLS.partners.join(',')), 'Partenaires').map(mapPartner);
-    const drivers = check(await db.from('drivers').select(COLS.drivers.join(',')), 'Livreurs');
+    const partners = (await read('partners', db.from('partners').select(COLS.partners.join(',')), 'Partenaires')).map(mapPartner);
+    const drivers = await read('drivers', db.from('drivers').select(COLS.drivers.join(',')), 'Livreurs');
     const pids = [...new Set(drivers.map((d) => d.profile_id).filter(Boolean).concat(me ? [me.userId] : []))];
-    const profs = pids.length ? check(await db.from('profiles').select('id,full_name,phone').in('id', pids), 'Profils') : [];
+    const profs = pids.length ? await read('profiles', db.from('profiles').select('id,full_name,phone').in('id', pids), 'Profils') : [];
     profs.forEach((p) => { names[p.id] = p.full_name; });
-    const locRows = drivers.length ? check(await db.from('driver_locations').select(COLS.driver_locations.join(','))
+    const locRows = drivers.length ? await read('driver_locations', db.from('driver_locations').select(COLS.driver_locations.join(','))
       .in('driver_id', drivers.map((d) => d.id)).order('created_at', { ascending: false }).limit(Math.max(200, drivers.length * 10)), 'Positions') : [];
     const lastLoc = {}; locRows.forEach((l) => { if (!lastLoc[l.driver_id]) lastLoc[l.driver_id] = l; });
     const livreurs = drivers.map((d, i) => mapDriver(d, i, profs.find((p) => p.id === d.profile_id), lastLoc[d.id]));
-    const rows = check(await db.from('parcels').select(COLS.parcels.join(','))
+    const rows = await read('parcels', db.from('parcels').select(COLS.parcels.join(','))
       .order(PC.createdAt || 'tracking_number', { ascending: false }).limit(CFG.maxParcels || 500), 'Colis');
     const evs = await fetchEvents(rows.map((r) => r.id));
     const proofs = await signedProofs(rows);
@@ -229,7 +257,15 @@
     if (PC.deliveryFee) row[PC.deliveryFee] = c.frais;
     if (PC.parcelType) row[PC.parcelType] = c.type;
     if (PC.weight && c.poids != null) row[PC.weight] = c.poids;
-    const ins = check(await client().from('parcels').insert(row).select('id').single(), 'Création du colis');
+    let res;
+    for (let k = 0; k < 4; k++) {
+      res = await client().from('parcels').insert(row).select('id').single();
+      const dup = res.error && res.error.code === '23505' && /tracking_number/.test((res.error.message || '') + (res.error.details || ''));
+      if (!dup || typeof nextCode !== 'function') break;
+      const old = c.code; c.code = nextCode(); row.tracking_number = c.code;     // numéro déjà pris : nouvel essai
+      window.dispatchEvent(new CustomEvent('fe-code-changed', { detail: { old, code: c.code } }));
+    }
+    const ins = check(res, 'Création du colis');
     c.dbId = ins.id; c.id = ins.id;
     await addEvent(c, 'pending', c.hist[0] && c.hist[0].note, null);
   }
@@ -270,7 +306,7 @@
   function run(op, target, extra) {
     const fn = OPS[op]; if (!fn) return Promise.reject(new Error('Opération inconnue : ' + op));
     const key = target && (target.code || target.id) ? op[0] + ':' + (target.code || target.id) : op;
-    return enqueue(op === 'createParcel' || op === 'status' ? 'p:' + target.code : key, () => fn(target, extra));
+    return enqueue(op === 'createParcel' || op === 'status' ? 'p:' + (target.token || target.code) : key, () => fn(target, extra));
   }
 
   /* ---------- Temps réel (parcels, drivers, driver_locations) ---------- */
@@ -312,6 +348,6 @@
     return mapParcel(row, row.events || [], [{ id: row.partner_id, company_name: row.partner_name || 'FAST EXPRESS', contact_phone: '' }], {});
   }
 
-  window.FEDB = { configured, signIn, signOut, restore, loadAll, reload: loadAll, run, subscribe, unsubscribe, track,
+  window.FEDB = { configured, signIn, signOut, restore, onAuth, loadAll, reload: loadAll, run, subscribe, unsubscribe, track,
     _test: { appStatus, eventStatus, mapParcel, COLS } };
 })();

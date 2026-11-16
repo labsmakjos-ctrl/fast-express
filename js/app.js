@@ -49,7 +49,14 @@ const ic=(n,s=18)=>`<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 2
 
 /* ---------- Référentiels ---------- */
 const CFG=window.FE_CONFIG||{};
-const MODE=CFG.mode==='supabase'?'supabase':'demo';
+/* Mode : démo par défaut. « ?mode=supabase » ouvre le mode Supabase pour ce lien (mémorisé pendant la session
+   du navigateur), « ?mode=demo » revient à la démo. */
+const MODE=(()=>{let m=CFG.mode==='supabase'?'supabase':'demo';
+ if(CFG.allowModeParam!==false){try{const q=new URLSearchParams(location.search).get('mode');
+  if(q==='supabase'||q==='demo')sessionStorage.setItem('fe-mode',q);
+  const sm=sessionStorage.getItem('fe-mode');if(sm==='supabase'||sm==='demo')m=sm}catch(e){const q=new URLSearchParams(location.search).get('mode');if(q==='supabase'||q==='demo')m=q}}
+ return m})();
+const modeQS=()=>MODE==='supabase'&&CFG.mode!=='supabase'?'?mode=supabase':'';
 /* Colonnes facultatives : en mode Supabase, une fonctionnalité n'est affichée que si sa colonne est confirmée dans config.js */
 const OPT=((CFG.optionalColumns||{}).parcels)||{};
 const HAS={cod:MODE==='demo'||!!OPT.codAmount,type:MODE==='demo'||!!OPT.parcelType,weight:MODE==='demo'||!!OPT.weight,fee:MODE==='demo'||!!OPT.deliveryFee};
@@ -250,7 +257,16 @@ function pushWA(c,key,t=Date.now(),silent=false){
  return true}
 
 /* ---------- Actions métier ---------- */
-function nextCode(){let code;do{code='FE-26-'+(S.seq++)}while(S.colis.some(c=>c.code===code));return code}
+/* Numéro de suivi. Démo : suite FE-26-xxxxx. Supabase : date + 4 caractères aléatoires (FE-261116-4K7Q),
+   car un partenaire ou un livreur ne voit pas tous les colis et ne peut pas connaître le dernier numéro utilisé. */
+const CODE_ALPHA='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function randCode(n){const a=new Uint32Array(n);(window.crypto||{}).getRandomValues?crypto.getRandomValues(a):a.forEach((_,i)=>a[i]=Math.random()*4294967296);return[...a].map(x=>CODE_ALPHA[x%CODE_ALPHA.length]).join('')}
+function nextCode(){let code;
+ if(MODE==='supabase'){const d=new Date();const ymd=String(d.getFullYear()).slice(2)+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0');
+  do{code='FE-'+ymd+'-'+randCode(4)}while(S.colis.some(c=>c.code===code));return code}
+ do{code='FE-26-'+(S.seq++)}while(S.colis.some(c=>c.code===code));return code}
+/* Numéro changé par Supabase (doublon détecté) : on met à jour l'affichage */
+window.addEventListener('fe-code-changed',e=>{const {old,code}=e.detail;S.log.forEach(x=>{if(x.code===old)x.code=code});Object.values(S.wa).forEach(t=>t.msgs.forEach(m=>{if(m.code===old){m.code=code;m.text=m.text.split(old).join(code)}}));if(openCode===old)openCode=code;if(newCode===old)newCode=code;toast(`Numéro déjà utilisé : le colis devient ${esc(code)}`,'warn');refresh()});
 function createColis(d){
  const code=nextCode();
  const P=PA(d.partnerId)||S.partners[0];const pt=d.point;
@@ -591,7 +607,7 @@ function renderNav(){$('#nav').innerHTML=viewsFor().map(v=>v.g?`<div class="nav-
 function go(id){if(location.hash!=='#'+id)location.hash=id;else route()}
 function route(){let h=location.hash.slice(1);if(h==='mobile')h='livreur';
  const pubQ=new URLSearchParams(location.search).get('suivi');
- if(!AUTH)cur=(h==='suivi'||pubQ)?'suivi':'login';
+ if(!AUTH){cur=(h==='suivi'||pubQ)?'suivi':'login';if(cur==='login'&&h&&h!=='login')pendingHash=h}
  else if(isDriver())cur='livreur';
  else{const vs=viewsFor().filter(v=>v.id);cur=vs.find(v=>v.id===h)?h:vs[0].id}closeAll();$('#rail').classList.remove('on');$('#scrim').classList.remove('on');render();window.scrollTo(0,0)}
 function render(){
@@ -605,7 +621,7 @@ function render(){
 function renderUser(){
  const u=$('#userBox');if(!AUTH){u.innerHTML='';return}
  const role={manager:'Responsable des opérations',partner:'Partenaire expéditeur',driver:'Livreur'}[AUTH.role];
- u.innerHTML=`<span class="av" style="background:#0e8a65">${initials(AUTH.name)}</span><div style="min-width:0;flex:1">${esc(AUTH.name)}<small>${role}${MODE==='demo'?' · démo':''}</small></div><button class="rail-btn" id="logoutBtn" type="button" title="Se déconnecter" style="padding:6px 8px">${ic('x',14)}</button>`;
+ u.innerHTML=`<span class="av" style="background:#0e8a65">${initials(AUTH.name)}</span><div style="min-width:0;flex:1">${esc(AUTH.name)}<small>${role}${MODE==='demo'?' · démo':' · Supabase'}</small></div><button class="rail-btn" id="logoutBtn" type="button" title="Se déconnecter" style="padding:6px 8px">${ic('x',14)}</button>`;
  $('#logoutBtn').onclick=logout;
  const demoOnly=MODE==='demo'&&isMgr();$('#resetBtn').hidden=!demoOnly;$('#simToggle').closest('.sim').hidden=!demoOnly;
 }
@@ -1241,6 +1257,9 @@ R.partenaire=()=>{
    Connexion (Supabase Auth, ou comptes de démonstration)
    ========================================================= */
 const SKEY='fastexpress-app-session';
+let pendingHash=null; // page demandée avant la connexion, rouverte ensuite si le rôle y a droit
+/* Ouvre une session Supabase : utilisateur, données, temps réel. Tout ou rien. */
+async function sbOpen(auth){AUTH=auth;try{await window.FEDB.loadAll();window.FEDB.subscribe(onRemoteChange)}catch(e){AUTH=null;throw e}}
 let loginErr='',loginBusy=false;
 function authFromUser(u){const a={userId:u.id,role:u.role,name:u.full_name,phone:u.phone,email:u.email};
  if(u.role==='driver')a.driverId=S.livreurs.find(l=>l.profileId===u.id)?.id;
@@ -1249,7 +1268,7 @@ function renderLogin(){
  const box=$('#login');const demo=MODE==='demo';
  const grp=(role,t)=>{const us=S.users.filter(u=>u.role===role);return us.length?`<div class="acc-g">${t}</div>${us.map(u=>`<button class="acc" type="button" data-u="${esc(u.email)}"><span class="av" style="background:${role==='manager'?'#0e8a65':role==='driver'?(S.livreurs.find(l=>l.profileId===u.id)?.couleur||'#1d5ea8'):'#b5651d'};width:30px;height:30px;font-size:11px">${initials(u.full_name)}</span><span style="flex:1;min-width:0"><b style="display:block;font-size:13.5px">${esc(role==='partner'?(S.partners.find(p=>p.profileId===u.id)?.company_name||u.full_name):u.full_name)}</b><span class="mono">${esc(u.email)}</span></span></button>`).join('')}`:''};
  box.innerHTML=`<div class="login-card">
-  <div class="stack" style="align-items:center;gap:10px">${logoHtml(92)}<h1>Connexion</h1><p class="sub">Plateforme de livraison FAST EXPRESS</p><span class="mode-pill ${demo?'':'live'}">${demo?'Mode démonstration':'Connecté à Supabase'}</span></div>
+  <div class="stack" style="align-items:center;gap:10px">${logoHtml(92)}<h1>Connexion</h1><p class="sub">Plateforme de livraison FAST EXPRESS</p><span class="mode-pill ${demo?'':'live'}">${demo?'Mode démonstration':'Mode Supabase · données réelles'}</span></div>
   <form class="stack" id="lgF" novalidate style="gap:12px">
    <div class="field"><label for="lg1">Adresse e-mail</label><input class="input" id="lg1" type="email" autocomplete="username" inputmode="email" placeholder="nom@exemple.ga" style="min-height:46px;font-size:16px"></div>
    <div class="field"><label for="lg2">Mot de passe</label><input class="input" id="lg2" type="password" autocomplete="current-password" style="min-height:46px;font-size:16px"></div>
@@ -1257,7 +1276,7 @@ function renderLogin(){
    <button class="bigbtn pri" type="button" id="lgGo" ${loginBusy?'disabled':''}>${loginBusy?'Connexion…':'Se connecter'}</button>
   </form>
   ${demo?`<div class="stack" style="gap:6px"><p class="small muted" style="margin:0">Comptes de démonstration (mot de passe : <b class="mono">${esc(DEMO_PASSWORD)}</b>). Touchez un compte pour remplir le formulaire.</p>${grp('manager','Responsable')}${grp('driver','Livreurs')}${grp('partner','Partenaires')}</div>`:`<p class="small muted" style="margin:0;text-align:center">Votre compte est créé par FAST EXPRESS. Mot de passe oublié : contactez l'agence.</p>`}
-  <a class="btn ghost" href="?#suivi" style="align-self:center">${ic('eye',16)}Suivre un colis</a>
+  <div class="row wrap" style="justify-content:center;gap:6px"><a class="btn ghost" href="${modeQS()||'?'}#suivi">${ic('eye',16)}Suivre un colis</a>${!demo&&CFG.mode!=='supabase'?`<a class="btn ghost" href="?mode=demo">Revenir à la démo</a>`:''}</div>
  </div>`;
  box.querySelectorAll('[data-u]').forEach(b=>b.onclick=()=>{$('#lg1').value=b.dataset.u;$('#lg2').value=DEMO_PASSWORD;$('#lgGo').focus()});
  bindForm($('#lgF'),$('#lgGo'),doLogin);
@@ -1267,17 +1286,18 @@ async function doLogin(){
  if(!email||!pass){loginErr='Saisissez votre e-mail et votre mot de passe.';renderLogin();return}
  loginBusy=true;loginErr='';renderLogin();$('#lg1').value=email;
  try{
-  if(MODE==='supabase'){const r=await window.FEDB.signIn(email,pass);if(r.error)throw new Error(r.error);AUTH=r.auth;await window.FEDB.loadAll();window.FEDB.subscribe(onRemoteChange)}
+  if(MODE==='supabase'){const r=await window.FEDB.signIn(email,pass);if(r.error)throw new Error(r.error);
+   try{await sbOpen(r.auth)}catch(e){await window.FEDB.signOut().catch(()=>{});AUTH=null;throw new Error('Connexion réussie, mais le chargement des données a échoué : '+(e.message||'erreur inconnue')+'. Vous avez été déconnecté.')}}
   else{const u=S.users.find(x=>x.email.toLowerCase()===email.toLowerCase());if(!u||pass!==DEMO_PASSWORD)throw new Error('E-mail ou mot de passe incorrect.');AUTH=authFromUser(u);try{localStorage.setItem(SKEY,u.id)}catch(e){}}
   loginBusy=false;log('livreur','',`${AUTH.name} s'est connecté`,AUTH.name);save();toast(`Bienvenue ${esc(first(AUTH.name))}`);
-  location.hash=isDriver()?'livreur':isPartner()?'partenaire':'tableau';route();
+  const want=pendingHash;pendingHash=null;location.hash=isDriver()?'livreur':want||(isPartner()?'partenaire':'tableau');route();
  }catch(e){loginBusy=false;loginErr=e.message||'Connexion impossible.';renderLogin();$('#lg1').value=email}
 }
 async function logout(){
- gpsStop();drvPreview=null;drvId=null;
+ gpsStop();drvPreview=null;drvId=null;AUTH=null;loginErr='';pendingHash=null;
  if(MODE==='supabase'&&window.FEDB)await window.FEDB.signOut().catch(()=>{});
  try{localStorage.removeItem(SKEY)}catch(e){}
- AUTH=null;closeAll();history.replaceState(null,'',location.pathname);route();toast('Vous êtes déconnecté');
+ AUTH=null;closeAll();history.replaceState(null,'',location.pathname+modeQS());route();toast('Vous êtes déconnecté');
 }
 /* Changement reçu de Supabase en temps réel : on redessine, sauf si l'utilisateur est en train de saisir */
 function onRemoteChange(){
@@ -1335,8 +1355,10 @@ window.addEventListener('storage',e=>{
 async function boot(){
  if(MODE==='supabase'){
   S={v:3,settings:{autoCreate:true},colis:[],livreurs:[],partners:[],users:[],log:[],wa:{},tpl:JSON.parse(JSON.stringify(DEF_TPL)),seq:0,sim:false,read:{}};
-  if(!window.FEDB||!window.FEDB.configured()){$('#login').hidden=false;$('#login').innerHTML=`<div class="login-card"><div class="stack" style="align-items:center;gap:10px">${logoHtml(80)}<h1>Configuration incomplète</h1><p class="sub">Le mode Supabase est activé dans <b>js/config.js</b>, mais l'adresse du projet ou la clé publique « anon » est vide (ou la bibliothèque Supabase n'a pas pu se charger).</p></div></div>`;return}
-  try{const a=await window.FEDB.restore();if(a){AUTH=a;await window.FEDB.loadAll();window.FEDB.subscribe(onRemoteChange)}}catch(e){console.error(e);toast('Connexion à Supabase impossible : '+esc(e.message||''),'warn')}
+  if(!window.FEDB||!window.FEDB.configured()){$('#login').hidden=false;$('#login').innerHTML=`<div class="login-card"><div class="stack" style="align-items:center;gap:10px">${logoHtml(80)}<h1>Configuration incomplète</h1><p class="sub">Le mode Supabase a besoin de l'adresse du projet et de la clé publique <b>sb_publishable_…</b> dans <b>js/config.js</b>${!CFG.supabaseAnonKey?' : la clé publique est encore vide':''}.</p><a class="btn" href="?mode=demo">Revenir à la démo</a></div></div>`;return}
+  try{const a=await window.FEDB.restore();if(a)await sbOpen(a)}
+  catch(e){console.error(e);AUTH=null;await window.FEDB.signOut().catch(()=>{});loginErr=(e.message||'Connexion impossible')+' · Reconnectez-vous.'}
+  window.FEDB.onAuth(ev=>{if(ev==='SIGNED_OUT'&&AUTH){gpsStop();AUTH=null;closeAll();loginErr='Votre session est terminée. Reconnectez-vous.';route()}});
  }else{
   S=load()||seed();save();
   try{const id=localStorage.getItem(SKEY);const u=id&&S.users.find(x=>x.id===id);if(u)AUTH=authFromUser(u)}catch(e){}

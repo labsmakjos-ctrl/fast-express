@@ -45,7 +45,20 @@ Mot de passe pour tous : **`demo2026`**. Sur l'écran de connexion, touchez un c
 
 ---
 
-## 2. Brancher votre projet Supabase (quand vous serez prêt)
+## 2. Mode Supabase (données réelles)
+
+Le site public reste en **démonstration**. Le mode Supabase s'ouvre avec le lien :
+
+- `https://labsmakjos-ctrl.github.io/fast-express/?mode=supabase` (connexion avec les vrais comptes Supabase) ;
+- `?mode=demo` pour revenir à la démonstration.
+
+L'adresse du projet est déjà dans `js/config.js`. Il reste à y mettre la **clé publique** `sb_publishable_…`
+(champ `supabaseAnonKey`). Sans elle, le mode Supabase affiche « Configuration incomplète ».
+
+Rôles reconnus (`profiles.role`) : `manager`, `driver`, `partner` (affiché « Partenaire »).
+Un compte avec `is_active = false` est refusé.
+
+## 2 bis. Brancher votre projet Supabase (détails)
 
 > Rien n'est modifié dans votre base par cette étape : l'application **lit et écrit** dans vos tables existantes, selon vos règles RLS.
 

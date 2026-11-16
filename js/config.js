@@ -11,10 +11,13 @@
    navigateurs qui ouvrent l'application.
    ===================================================================== */
 window.FE_CONFIG = {
+  // Le site public reste en démonstration. Le mode Supabase s'ouvre avec le lien
+  // « …/fast-express/?mode=supabase » (et « ?mode=demo » pour revenir à la démo).
   mode: 'demo',
+  allowModeParam: true,
 
-  supabaseUrl: '',      // ex. 'https://abcdefghijkl.supabase.co'
-  supabaseAnonKey: '',  // clé publique « anon »
+  supabaseUrl: 'https://cxrkzvnfbscdcddoatsp.supabase.co',
+  supabaseAnonKey: '',  // clé PUBLIQUE uniquement : « sb_publishable_… » (jamais « sb_secret_… » ni « service_role »)
 
   // Colonnes facultatives : leur existence n'a pas encore été confirmée.
   // Laissez null tant qu'elles ne sont pas confirmées ; indiquez le nom
