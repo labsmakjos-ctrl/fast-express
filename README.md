@@ -62,7 +62,13 @@ Un compte avec `is_active = false` est refusé.
 
 - Un livreur ne peut passer **en service** qu'après avoir autorisé la géolocalisation et obtenu une première position réelle.
   Aucun bouton « Refuser » : sans position, il reste hors service, avec une aide pour autoriser la localisation.
-- Pendant le service, la position est envoyée toutes les 2 minutes (`driver_locations`).
+- Pendant le service, la position est transmise **automatiquement**, sans aucun bouton (`driver_locations`) :
+  le téléphone suit les déplacements (`watchPosition`) ; l'application envoie la position dès que le livreur
+  s'est déplacé d'au moins 25 m (au plus une fois toutes les 20 s), et au moins toutes les 2 minutes même immobile.
+- Sans connexion Internet : « Hors ligne » est affiché au livreur, les positions réelles sont gardées
+  (30 au maximum) puis envoyées en une seule fois au retour de la connexion. Aucune position n'est inventée.
+- Le gestionnaire voit le marqueur bouger sans recharger la page (temps réel), avec une relecture de sécurité
+  toutes les 30 s si le temps réel de la table `driver_locations` n'est pas activé dans Supabase.
 - « Terminer mon service » ou la déconnexion arrêtent le GPS et enregistrent `is_on_duty = false`.
 - Le gestionnaire peut **demander la position** (Supabase Realtime Broadcast). La demande n'est affichée « reçue »
   que si l'application du livreur répond ; sinon « Non reçue ».
@@ -104,7 +110,7 @@ Le script `supabase/04_proposition_comptoir_agence.sql` ajoute l'expéditeur « 
 | En service / Hors service | `drivers.is_on_duty` |
 | Accord de partage GPS | `drivers.consent_at` |
 | Historique d'un colis | `parcel_events` (`status`, `reason`, `author_id`, `author_role`, `lat`, `lng`) |
-| Positions GPS (toutes les 2 min) | `driver_locations` |
+| Positions GPS (automatiques : déplacement ou 2 min) | `driver_locations` |
 | Lien de suivi client | `parcels.tracking_token` |
 | Code de remise | `parcels.confirmation_code` |
 
@@ -174,6 +180,10 @@ node tests/test-mode-demo.js
 
 ```bash
 node tests/test-mode-supabase.js
+```
+
+```bash
+node tests/test-gps-auto.js
 ```
 
 Le second test fait fonctionner l'application contre un Supabase simulé qui **n'accepte que les colonnes réelles** de votre projet et vos 6 statuts : toute erreur de nom de colonne fait échouer le test.

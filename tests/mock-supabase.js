@@ -29,6 +29,9 @@ const persist=()=>localStorage.setItem('__mockdb',JSON.stringify(DB));
 const err=m=>({data:null,error:{message:m}});
 function badCols(t,cols){return cols.filter(c=>!ALLOWED[t].includes(c))}
 const listeners=[];
+const PGBC=new BroadcastChannel('mockpg');
+PGBC.onmessage=({data:m})=>{const tb=DB[m.t];if(!tb)return;const i=tb.findIndex(r=>r.id===m.row.id);if(i>=0)tb[i]=Object.assign({},m.row);else tb.push(Object.assign({},m.row));
+ if(window.__PG_DOWN)return;listeners.forEach(l=>l(m.t,m.e,m.row))};
 class Q{
  constructor(t){this.t=t;this.op='select';this.f=[];this.ord=null;this.lim=null;this.one=null;this.cols=null}
  select(c){if(this.op==='select'||this.op==='insert'){this.cols=c}if(this.op==='select')this.cols=c;return this}
@@ -36,31 +39,33 @@ class Q{
  update(p){this.op='update';this.patch=p;return this}
  eq(c,v){this.f.push([c,'eq',v]);return this}
  in(c,v){this.f.push([c,'in',v]);return this}
+ gt(c,v){this.f.push([c,'gt',v]);return this}
  order(c,o){this.ord=[c,o&&o.ascending!==false];return this}
  limit(n){this.lim=n;return this}
  maybeSingle(){this.one='maybe';return this}
  single(){this.one='single';return this}
  then(res,rej){return Promise.resolve(this.exec()).then(res,rej)}
  exec(){
-  const t=this.t;if(!ALLOWED[t])return err('relation "'+t+'" does not exist');
+  const t=this.t;if(!navigator.onLine){LOG.push({t,op:this.op,offline:true});return err('TypeError: Failed to fetch')}
+  if(!ALLOWED[t])return err('relation "'+t+'" does not exist');
   const uid=session&&session.user.id;const prof=DB.profiles.find(p=>p.id===uid);
   if(this.op==='select'&&prof&&prof.role==='partner'&&(t==='drivers'||t==='driver_locations'))return{data:null,error:{code:'42501',message:'permission denied for table '+t}};
   if(this.op==='select'&&uid==='u-p2'&&t==='parcels')return{data:null,error:{code:'42501',message:'permission denied for table parcels'}};
   const used=[...this.f.map(x=>x[0]),...(this.ord?[this.ord[0]]:[])];
   const selCols=(this.cols||'*')==='*'?ALLOWED[t]:this.cols.split(',').map(s=>s.trim()).filter(Boolean);
   const bad=badCols(t,[...used,...selCols]);if(bad.length){LOG.push({t,op:this.op,error:'colonne inconnue '+bad});return err('column '+t+'.'+bad[0]+' does not exist')}
-  const match=r=>this.f.every(([c,o,v])=>o==='eq'?r[c]===v:v.includes(r[c]));
+  const match=r=>this.f.every(([c,o,v])=>o==='eq'?r[c]===v:o==='gt'?r[c]>v:v.includes(r[c]));
   if(this.op==='select'){let rows=DB[t].filter(match);if(this.ord){const [c,a]=this.ord;rows=rows.slice().sort((x,y)=>(x[c]>y[c]?1:x[c]<y[c]?-1:0)*(a?1:-1))}if(this.lim)rows=rows.slice(0,this.lim);rows=rows.map(r=>Object.fromEntries(selCols.map(c=>[c,r[c]??null])));
    if(this.one)return{data:rows[0]||null,error:this.one==='single'&&!rows[0]?{message:'no rows'}:null};return{data:rows,error:null}}
-  if(this.op==='insert'){const out=[];for(const r of this.rows){const b=badCols(t,Object.keys(r));if(b.length){LOG.push({t,op:'insert',error:'colonne inconnue '+b});return err('column "'+b[0]+'" of relation "'+t+'" does not exist')}
+  if(this.op==='insert'){window.__REQ=(window.__REQ||[]);window.__REQ.push({t,n:this.rows.length});const out=[];for(const r of this.rows){const b=badCols(t,Object.keys(r));if(b.length){LOG.push({t,op:'insert',error:'colonne inconnue '+b});return err('column "'+b[0]+'" of relation "'+t+'" does not exist')}
     if((t==='parcels'||t==='parcel_events')&&r.status&&!STATUSES.includes(r.status)){LOG.push({t,op:'insert',error:'statut '+r.status});return err('violates check constraint status')}
     if(t==='parcels'&&DB.parcels.some(x=>x.tracking_number===r.tracking_number)){LOG.push({t,op:'insert',dup:r.tracking_number});return{data:null,error:{code:'23505',message:'duplicate key value violates unique constraint "parcels_tracking_number_key"',details:'Key (tracking_number)=('+r.tracking_number+') already exists.'}}}
     const row=Object.assign({},r);if(!row.id)row.id=t==='parcels'?'n'+Math.random().toString(36).slice(2,9):DB[t].length+1;if(ALLOWED[t].includes('created_at')&&!row.created_at)row.created_at=new Date().toISOString();DB[t].push(row);out.push(row);LOG.push({t,op:'insert',row});
-    listeners.forEach(l=>l(t,'INSERT',row))}
+    listeners.forEach(l=>l(t,'INSERT',row));PGBC.postMessage({t,e:'INSERT',row})}
    persist();const sc=(this.cols||'id').split(',');const d=out.map(r=>Object.fromEntries(sc.map(c=>[c,r[c]])));return{data:this.one?d[0]:d,error:null}}
   if(this.op==='update'){const b=badCols(t,Object.keys(this.patch));if(b.length){LOG.push({t,op:'update',error:'colonne inconnue '+b});return err('column "'+b[0]+'" does not exist')}
    if(t==='parcels'&&this.patch.status&&!STATUSES.includes(this.patch.status)){LOG.push({t,op:'update',error:'statut '+this.patch.status});return err('violates check constraint status')}
-   const rows=DB[t].filter(match);rows.forEach(r=>{Object.assign(r,this.patch);listeners.forEach(l=>l(t,'UPDATE',r))});LOG.push({t,op:'update',patch:this.patch,n:rows.length});persist();return{data:null,error:null}}
+   const rows=DB[t].filter(match);rows.forEach(r=>{Object.assign(r,this.patch);listeners.forEach(l=>l(t,'UPDATE',r));PGBC.postMessage({t,e:'UPDATE',row:r})});LOG.push({t,op:'update',patch:this.patch,n:rows.length});persist();return{data:null,error:null}}
  }
 }
 let session=JSON.parse(localStorage.getItem('__mocksession')||'null');const AUTHL=window.__AUTHL=[];
@@ -75,7 +80,7 @@ const client={
   const ch={name,key,hs:[],rt:[],pres:{},mine:null,bc:null,
    on(ev,f,cb){if(ev==='postgres_changes')this.hs.push([f,cb]);else this.rt.push([ev,f,cb]);return this},
    subscribe(statusCb){
-    if(this.hs.length){listeners.push((t,e,row)=>this.hs.forEach(([f,cb])=>{if(f.table===t&&(f.event==='*'||f.event===e))setTimeout(()=>cb({new:row,eventType:e}),10)}));window.__CH=this}
+    if(this.hs.length){listeners.push((t,e,row)=>!window.__PG_DOWN&&this.hs.forEach(([f,cb])=>{if(f.table===t&&(f.event==='*'||f.event===e))setTimeout(()=>cb({new:row,eventType:e}),10)}));window.__CH=this}
     if(this.rt.length){const self=this;window.__RTCH=this;
      if(window.__RT_DOWN){setTimeout(()=>statusCb&&statusCb('CHANNEL_ERROR'),10);return this}
      this.bc=new BroadcastChannel('mockrt:'+name);

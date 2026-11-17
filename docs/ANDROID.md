@@ -22,7 +22,7 @@ ce module utilise automatiquement les plugins natifs s'ils sont présents :
 | `@capacitor/geolocation` | Autorisation et position ponctuelle |
 | `@capacitor-community/background-geolocation` | Suivi continu avec service au premier plan |
 
-Le reste (service obligatoire, envoi toutes les 2 minutes vers `driver_locations`,
+Le reste (service obligatoire, envoi automatique vers `driver_locations` à chaque déplacement et au moins toutes les 2 minutes,
 demandes de position par Broadcast, fin de service) ne change pas.
 
 ## Étapes (à réaliser plus tard, sur validation)

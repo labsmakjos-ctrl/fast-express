@@ -51,8 +51,13 @@ window.FE_CONFIG = {
   // ou 'osm', 'carto', 'esri' pour en imposer un en premier.
   mapTiles: null,
 
-  // Envoi de la position GPS des livreurs (millisecondes)
-  gpsIntervalMs: 120000,
+  // Envoi AUTOMATIQUE de la position GPS des livreurs pendant le service
+  gpsIntervalMs: 120000,   // envoi de sécurité au moins toutes les 2 minutes, même immobile
+  gpsMoveMeters: 25,       // envoi dès que le livreur s'est déplacé d'au moins 25 m…
+  gpsMinGapMs: 20000,      // …mais au plus une fois toutes les 20 secondes
+  gpsMaxAccuracyM: 150,    // position trop imprécise : pas d'envoi lié au déplacement
+  gpsQueueMax: 30,         // positions gardées sans connexion, envoyées au retour du réseau
+  livePollMs: 30000,       // gestionnaire : relecture de sécurité des positions (lecture seule)
 
   // Rayon (km) autour d'un centre de quartier pour en déduire le quartier
   zoneRadiusKm: 1.2,

@@ -223,6 +223,7 @@
     const locRows = drivers.length ? await read('driver_locations', db.from('driver_locations').select(COLS.driver_locations.join(','))
       .in('driver_id', drivers.map((d) => d.id)).order('created_at', { ascending: false }).limit(Math.max(200, drivers.length * 10)), 'Positions') : [];
     const lastLoc = {}; locRows.forEach((l) => { if (!lastLoc[l.driver_id]) lastLoc[l.driver_id] = l; });
+    locSince = locRows.length ? locRows[0].created_at : null;
     const livreurs = drivers.map((d, i) => mapDriver(d, i, profs.find((p) => p.id === d.profile_id), lastLoc[d.id]));
     const rows = await read('parcels', db.from('parcels').select(COLS.parcels.join(','))
       .order(PC.createdAt || 'tracking_number', { ascending: false }).limit(CFG.maxParcels || 500), 'Colis');
@@ -297,10 +298,14 @@
   }
   async function duty(l) { check(await client().from('drivers').update({ is_on_duty: l.statut === 'disponible' }).eq('id', l.id), 'Disponibilité'); }
   async function consent(l) { check(await client().from('drivers').update({ consent_at: l.consentAt ? new Date(l.consentAt).toISOString() : null }).eq('id', l.id), 'Consentement GPS'); }
+  /* Une position, ou un lot de positions gardées hors connexion : une seule requête */
   async function location(l, fix) {
-    const row = Object.assign({ driver_id: l.id }, fix);
-    if (CFG.batteryAsFraction && row.battery_level != null) row.battery_level = row.battery_level / 100;
-    check(await client().from('driver_locations').insert(row), 'Position GPS');
+    const rows = (Array.isArray(fix) ? fix : [fix]).map((f) => {
+      const row = Object.assign({ driver_id: l.id }, f);
+      if (CFG.batteryAsFraction && row.battery_level != null) row.battery_level = row.battery_level / 100;
+      return row;
+    });
+    check(await client().from('driver_locations').insert(rows.length === 1 ? rows[0] : rows), 'Position GPS');
   }
   const OPS = { createParcel, status, duty, consent, location };
   function run(op, target, extra) {
@@ -333,10 +338,32 @@
       })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'driver_locations' }, (p) => {
         const r = p.new; const l = r && S.livreurs.find((x) => x.id === r.driver_id); if (!l) return;
-        l.pos = toXY(r.lat, r.lng); l.posAt = ts(r.recorded_at || r.created_at) || Date.now();
-        later();
+        if (applyLoc(l, r)) later();
       })
       .subscribe();
+  }
+  /* Nouvelle position d'un livreur (ignorée si plus ancienne que celle déjà affichée) */
+  function applyLoc(l, r) {
+    const at = ts(r.recorded_at || r.created_at) || Date.now();
+    if (l.posAt && at < l.posAt) return false;
+    l.pos = toXY(r.lat, r.lng); l.posAt = at; return true;
+  }
+  /* Relecture de sécurité (gestionnaire) : si le temps réel de la table driver_locations
+     n'arrive pas, les nouvelles positions et les passages en service sont relus toutes les 30 s.
+     Lecture seule ; renvoie true si quelque chose a changé. */
+  let locSince = null;
+  async function pollLive() {
+    if (!me || !S.livreurs.length) return false;
+    const db = client(); const ids = S.livreurs.map((l) => l.id); let changed = false;
+    let q = db.from('driver_locations').select(COLS.driver_locations.join(',')).in('driver_id', ids).order('created_at', { ascending: false }).limit(200);
+    if (locSince) q = q.gt('created_at', locSince);
+    const rows = check(await q, 'Positions') || [];
+    if (rows.length) locSince = rows[0].created_at || locSince;
+    const seen = {};
+    rows.forEach((r) => { if (seen[r.driver_id]) return; seen[r.driver_id] = 1; const l = S.livreurs.find((x) => x.id === r.driver_id); if (l && applyLoc(l, r)) changed = true; });
+    const ds = check(await db.from('drivers').select('id,is_on_duty').in('id', ids), 'Livreurs') || [];
+    ds.forEach((d) => { const l = S.livreurs.find((x) => x.id === d.id); if (l && !!d.is_on_duty !== (l.statut === 'disponible')) { l.statut = d.is_on_duty ? 'disponible' : 'hors_service'; changed = true; } });
+    return changed;
   }
   function unsubscribe() { if (channel) { client().removeChannel(channel); channel = null; } }
 
@@ -404,6 +431,6 @@
     return mapParcel(row, row.events || [], [{ id: row.partner_id, company_name: row.partner_name || 'FAST EXPRESS', contact_phone: '' }], {});
   }
 
-  window.FEDB = { configured, signIn, signOut, restore, onAuth, loadAll, gpsJoin, gpsTrack, gpsRequest, gpsAck, gpsLeave, gpsState: () => gpsStatus, reload: loadAll, run, subscribe, unsubscribe, track,
+  window.FEDB = { configured, signIn, signOut, restore, onAuth, loadAll, gpsJoin, gpsTrack, gpsRequest, gpsAck, gpsLeave, gpsState: () => gpsStatus, reload: loadAll, run, subscribe, unsubscribe, pollLive, track,
     _test: { appStatus, eventStatus, mapParcel, COLS } };
 })();

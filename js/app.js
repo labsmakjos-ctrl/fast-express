@@ -885,7 +885,10 @@ function mapInfo(){
  el.innerHTML=`<b style="font-family:var(--f-display);font-size:16px">Libreville en direct</b><p class="small muted" style="margin:4px 0 10px">Cliquez sur un livreur, une destination ou l'agence pour afficher le détail.</p><div class="row wrap small" style="gap:14px"><span><b class="num">${S.livreurs.filter(l=>charge(l)>0).length}</b> livreurs en tournée</span><span><b class="num">${enc}</b> colis sur la route</span></div>${(()=>{const bad=S.livreurs.filter(l=>onDuty(l)&&posState(l).k!=='fresh');return bad.length?`<div class="banner" style="margin-top:10px;background:var(--warn-soft);color:var(--warn)">${ic('alert',16)}<span><b>${bad.length} livreur${bad.length>1?'s':''} en service sans position à jour :</b> ${bad.map(l=>`<button class="lnk" style="font-family:var(--f-body)" data-ml2="${l.id}">${esc(l.nom)}</button> (${esc(posState(l).l.toLowerCase())})`).join(', ')}</span></div>`:''})()}`;
  el.querySelectorAll('[data-ml2]').forEach(b=>b.onclick=()=>{mapSel={k:'l',id:b.dataset.ml2};mapInfo();mapDraw()})}
 function target(l){const c=S.colis.find(x=>x.livreurId===l.id&&x.statut==='en_cours');if(c)return{x:c.x,y:c.y};if(S.colis.some(x=>x.livreurId===l.id&&(x.statut==='attribue'||x.statut==='recupere')))return{x:HQ.x+6,y:HQ.y+4};return null}
-function step(l,sp){if(l.offline)return;const t=target(l);if(!t||!l.pos)return;const dx=t.x-l.pos.x,dy=t.y-l.pos.y,d=Math.hypot(dx,dy);if(d<1)return;const s=Math.min(sp,d);l.pos.x+=dx/d*s;l.pos.y+=dy/d*s}
+/* Démo : seuls les livreurs SIMULÉS bougent tout seuls. Un livreur réellement connecté (onglet ou téléphone)
+   garde sa vraie position GPS : jamais de coordonnées inventées pour lui. */
+const liveDrv=l=>!!((RT.seen[l.id]&&Date.now()-RT.seen[l.id].at<25000)||(AUTH&&AUTH.driverId===l.id));
+function step(l,sp){if(l.offline||liveDrv(l))return;const t=target(l);if(!t||!l.pos)return;const dx=t.x-l.pos.x,dy=t.y-l.pos.y,d=Math.hypot(dx,dy);if(d<1)return;const s=Math.min(sp,d);l.pos.x+=dx/d*s;l.pos.y+=dy/d*s}
 let lastSave=0;
 /* Démo uniquement : déplacement simulé des livreurs. En mode Supabase, les positions viennent du GPS. */
 function startAnim(){cancelAnimationFrame(raf);if(MODE!=='demo')return;let lastDraw=0;const loop=t=>{if(cur!=='carte')return;S.livreurs.forEach(l=>{if(!onDuty(l))return;step(l,.12);const m=LMK[l.id];if(m&&t-lastDraw>120)m.setLatLng(llOf(l.pos))});if(t-lastDraw>120)lastDraw=t;if(Date.now()-lastSave>5000){lastSave=Date.now();save()}raf=requestAnimationFrame(loop)};if(!matchMedia('(prefers-reduced-motion: reduce)').matches)raf=requestAnimationFrame(loop)}
@@ -1132,39 +1135,102 @@ function drvBind(){
  const is=root.querySelector('#dsIssue');if(is)is.onclick=drvIssue;
 }
 
-/* ---------- Partage de la position GPS du livreur : OBLIGATOIRE pendant le service ----------
+/* ---------- Partage de la position GPS du livreur : OBLIGATOIRE et AUTOMATIQUE pendant le service ----------
    - Passer en service exige l'autorisation de géolocalisation ET une première position réelle.
-   - Pendant le service : position lue en continu, envoyée toutes les 2 minutes (driver_locations).
+   - Pendant le service, aucune action du livreur : watchPosition() suit ses déplacements et
+     l'application transmet seule la position (driver_locations) :
+       · dès qu'il s'est déplacé d'au moins 25 m (au plus une fois toutes les 20 s) ;
+       · et au moins toutes les 2 minutes, même immobile (sécurité), avec une position fraîche.
+   - Sans connexion : les positions réelles sont gardées en attente (30 au maximum) et envoyées
+     en une seule fois au retour de la connexion. Aucune position n'est jamais inventée.
    - Fin de service ou déconnexion : GPS arrêté et drivers.is_on_duty = false.
    - Version web : le navigateur suspend la localisation quand l'application passe en arrière-plan
      ou que l'écran se verrouille. Ce n'est PAS un suivi garanti en arrière-plan (voir docs/ANDROID.md). */
-const GPS_MS=CFG.gpsIntervalMs||120000;
+const GPS_MS=CFG.gpsIntervalMs||120000;                 // envoi de sécurité, même immobile
+const GPS_MOVE=CFG.gpsMoveMeters||25;                   // déplacement qui déclenche un envoi
+const GPS_GAP=CFG.gpsMinGapMs||20000;                   // délai minimal entre deux envois liés au déplacement
+const GPS_ACC=CFG.gpsMaxAccuracyM||150;                 // position trop imprécise : pas d'envoi lié au déplacement
+const GPS_QMAX=CFG.gpsQueueMax||30;                     // positions gardées hors connexion
 const POS_FRESH=(CFG.gpsFreshMin||3)*MIN,POS_STALE=(CFG.gpsStaleMin||10)*MIN;
 const REQ_TIMEOUT=CFG.gpsRequestTimeoutMs||15000;
-const GPS={watch:null,timer:null,last:null,lastSent:0,sentAt:null,err:'',far:false,starting:false,checking:false,hiddenAt:null,suspended:null,awake:''};
+const GPS={watch:null,timer:null,last:null,lastSent:0,sentAt:null,sentPos:null,sentTs:0,q:[],sending:false,net:'online',sendErr:'',err:'',far:false,starting:false,checking:false,refreshing:false,hiddenAt:null,suspended:null,awake:''};
 let dutyBusy=false;
 const gpsWanted=()=>{const l=me();return!!(l&&onDuty(l)&&(isDriver()||(MODE==='demo'&&drvPreview)))};
+const netUp=()=>navigator.onLine!==false;
+const gpsTs=p=>p&&p.timestamp?p.timestamp:Date.now();
+function gpsMeters(a,b){const R0=6371000,r=Math.PI/180,dLa=(b.latitude-a.latitude)*r,dLo=(b.longitude-a.longitude)*r;
+ const h=Math.sin(dLa/2)**2+Math.cos(a.latitude*r)*Math.cos(b.latitude*r)*Math.sin(dLo/2)**2;return 2*R0*Math.asin(Math.min(1,Math.sqrt(h)))}
+/* Faut-il transmettre cette nouvelle position ? (évite les écritures inutiles) */
+function gpsDue(p){
+ if(!GPS.lastSent)return'first';
+ const dt=Date.now()-GPS.lastSent;if(dt>=GPS_MS-1000)return'periodic';
+ if(dt<GPS_GAP||!GPS.sentPos)return null;
+ const c=p.coords;if(Number.isFinite(c.accuracy)&&c.accuracy>GPS_ACC)return null;
+ return gpsMeters(GPS.sentPos,c)>=Math.max(GPS_MOVE,Number.isFinite(c.accuracy)?c.accuracy:0)?'move':null}
+/* Nouvelle position fournie par watchPosition() */
+function gpsOnFix(p){if(!gpsWanted())return;GPS.last=p;const had=GPS.err;GPS.err='';if(gpsDue(p))gpsSend();else if(had)gpsPaint()}
 function gpsStart(){
- if(GPS.watch!=null||GPS.starting)return;GPS.starting=true;
- FEGeo.watch(p=>{GPS.last=p;GPS.err='';if(Date.now()-GPS.lastSent>=GPS_MS)gpsSend()},
+ if(GPS.watch!=null||GPS.starting)return;GPS.starting=true;GPS.net=netUp()?'online':'offline';
+ FEGeo.watch(gpsOnFix,
   e=>{if(e.code===1){gpsLost('denied');return}GPS.err=e.code===3?'Position introuvable pour le moment (signal GPS faible)':'Position indisponible : vérifiez que la localisation du téléphone est activée';gpsPaint()})
   .then(h=>{GPS.starting=false;if(gpsWanted())GPS.watch=h;else FEGeo.clear(h)}).catch(()=>{GPS.starting=false});
  clearInterval(GPS.timer);
- GPS.timer=setInterval(()=>{if(!gpsWanted())return;
-  if(GPS.last&&Date.now()-GPS.lastSent>=GPS_MS-1000)gpsSend();
-  if(document.visibilityState==='visible'&&GPS.sentAt&&Date.now()-GPS.sentAt>GPS_MS*1.75&&!GPS.err){GPS.err=`Aucune position envoyée depuis ${Math.round((Date.now()-GPS.sentAt)/60000)} min : vérifiez le GPS et la connexion Internet`;gpsPaint()}
- },15000);
+ GPS.timer=setInterval(gpsTick,Math.min(15000,Math.max(1000,GPS_MS/8)));
  FEGeo.keepAwake().then(s=>{GPS.awake=s;gpsPaint()});
 }
-function gpsStop(){FEGeo.clear(GPS.watch);clearInterval(GPS.timer);FEGeo.release();Object.assign(GPS,{watch:null,timer:null,starting:false,checking:false,last:null,lastSent:0,sentAt:null,err:'',far:false,hiddenAt:null,suspended:null,awake:''})}
-async function gpsSend(){
- const l=me();if(!l||!GPS.last||!gpsWanted())return;GPS.lastSent=Date.now();
- const c=GPS.last.coords;const bat=await FEGeo.battery();
- const fix={lat:c.latitude,lng:c.longitude,accuracy:Number.isFinite(c.accuracy)?Math.round(c.accuracy):null,speed:Number.isFinite(c.speed)?c.speed:null,heading:Number.isFinite(c.heading)?c.heading:null,battery_level:bat.level??null,is_charging:bat.charging??null,recorded_at:new Date(GPS.last.timestamp||Date.now()).toISOString()};
- const p=toXY(fix.lat,fix.lng);GPS.far=km(dist(p,HQ))>60;
- if(!GPS.far||MODE==='supabase'){l.pos=p;l.posAt=Date.now()}
- GPS.sentAt=Date.now();GPS.err='';remote('location',l,fix);if(MODE==='demo')save();gpsPaint();
+/* Toutes les 15 s : renvoi des positions en attente et envoi de sécurité toutes les 2 minutes */
+function gpsTick(){
+ if(!gpsWanted())return;
+ if(GPS.q.length)gpsFlush();
+ // déplacement arrivé pendant le délai minimal entre deux envois : transmis dès que le délai est passé
+ if(GPS.last&&GPS.lastSent&&gpsTs(GPS.last)!==GPS.sentTs&&gpsDue(GPS.last)==='move'){gpsSend();return}
+ if(GPS.lastSent&&Date.now()-GPS.lastSent>=GPS_MS-1000){
+  // position plus récente que la dernière envoyée : on l'envoie ; sinon (immobile, watchPosition
+  // peut se taire) on redemande une position RÉELLE au téléphone. Jamais de position réutilisée ou inventée.
+  if(GPS.last&&gpsTs(GPS.last)!==GPS.sentTs&&Date.now()-gpsTs(GPS.last)<Math.min(60000,GPS_MS/2))gpsSend();
+  else gpsRefresh();
+ }
+ if(document.visibilityState==='visible'&&GPS.sentAt&&Date.now()-GPS.sentAt>GPS_MS*1.75&&!GPS.err&&GPS.net==='online'&&!GPS.q.length){GPS.err=`Aucune position envoyée depuis ${Math.round((Date.now()-GPS.sentAt)/60000)} min : vérifiez le GPS et la connexion Internet`;gpsPaint()}
 }
+function gpsRefresh(){
+ if(GPS.refreshing)return;GPS.refreshing=true;
+ FEGeo.getCurrent({enableHighAccuracy:true,timeout:20000,maximumAge:30000})
+  .then(p=>{if(gpsWanted()){GPS.last=p;GPS.err='';gpsSend()}})
+  .catch(e=>{if(!gpsWanted())return;if(e&&e.code===1)gpsLost('denied');else{GPS.err='Position introuvable : aucune position envoyée (signal GPS faible ou localisation désactivée)';gpsPaint()}})
+  .finally(()=>{GPS.refreshing=false});
+}
+function gpsStop(){FEGeo.clear(GPS.watch);clearInterval(GPS.timer);FEGeo.release();Object.assign(GPS,{watch:null,timer:null,starting:false,checking:false,refreshing:false,last:null,lastSent:0,sentAt:null,sentPos:null,sentTs:0,q:[],sending:false,sendErr:'',err:'',far:false,hiddenAt:null,suspended:null,awake:''})}
+/* Enregistre la dernière position réelle et la transmet (ou la garde en attente sans connexion) */
+async function gpsSend(){
+ const l=me();if(!l||!GPS.last||!gpsWanted())return;
+ const ts=gpsTs(GPS.last);GPS.lastSent=Date.now();
+ if(ts===GPS.sentTs&&!GPS.q.length)return gpsPaint();          // même position déjà transmise
+ GPS.sentTs=ts;const c=GPS.last.coords;GPS.sentPos={latitude:c.latitude,longitude:c.longitude};
+ const bat=await FEGeo.battery();
+ const fix={lat:c.latitude,lng:c.longitude,accuracy:Number.isFinite(c.accuracy)?Math.round(c.accuracy):null,speed:Number.isFinite(c.speed)?c.speed:null,heading:Number.isFinite(c.heading)?c.heading:null,battery_level:bat.level??null,is_charging:bat.charging??null,recorded_at:new Date(ts).toISOString()};
+ GPS.q.push(fix);if(GPS.q.length>GPS_QMAX)GPS.q.splice(0,GPS.q.length-GPS_QMAX);
+ return gpsFlush();
+}
+const gpsNetErr=e=>!netUp()||/fetch|network|load failed|timed? ?out|connexion|ECONN|abort/i.test(String(e&&e.message||e));
+/* Envoi des positions en attente : une seule écriture pour tout le lot */
+async function gpsFlush(){
+ const l=me();if(!l||GPS.sending||!GPS.q.length)return;
+ if(!netUp()){GPS.net='offline';gpsPaint();return}
+ GPS.sending=true;const batch=GPS.q.slice();
+ try{
+  if(MODE==='supabase')await window.FEDB.run('location',l,batch.length===1?batch[0]:batch);
+  GPS.q.splice(0,batch.length);GPS.net='online';GPS.sendErr='';GPS.sentAt=Date.now();
+  const f=batch[batch.length-1],p=toXY(f.lat,f.lng);GPS.far=km(dist(p,HQ))>60;
+  if(!GPS.far||MODE==='supabase'){l.pos=p;l.posAt=Date.parse(f.recorded_at)||Date.now()}
+  if(MODE==='demo')save();
+ }catch(e){
+  if(gpsNetErr(e))GPS.net='offline';                              // gardées : renvoyées au retour de la connexion
+  else{console.error('[Supabase] Position GPS',e);GPS.q.splice(0,batch.length);GPS.sendErr=String(e&&e.message||e)}
+ }finally{GPS.sending=false;gpsPaint()}
+ if(GPS.q.length&&GPS.net==='online'&&netUp())return gpsFlush();
+}
+window.addEventListener('offline',()=>{if(!gpsWanted())return;GPS.net='offline';gpsPaint()});
+window.addEventListener('online',()=>{if(!gpsWanted())return;GPS.net='online';gpsPaint();gpsFlush();RT.track()});
 /* Service déjà « En service » (session restaurée, données de démo) : on vérifie que la position fonctionne */
 async function ensureGps(){
  if(GPS.watch||GPS.starting||GPS.checking||dutyBusy)return;GPS.checking=true;
@@ -1179,6 +1245,7 @@ async function goOnDuty(){
  const l=me();if(!l||onDuty(l)||dutyBusy)return;
  if(!FEGeo.secureContext())return gpsHelp('insecure');
  if(!FEGeo.available())return gpsHelp('unsupported');
+ if(MODE==='supabase'&&!netUp())return toast('Pas de connexion Internet : impossible de passer en service pour le moment','warn');
  dutyBusy=true;drvSheet=null;R.livreur();
  try{
   if(await FEGeo.permission()==='denied')throw{code:1};
@@ -1189,13 +1256,15 @@ async function goOnDuty(){
   l.statut='disponible';DRVREQ=null;log('livreur','',`${l.nom} est passé en service (position partagée)`,l.nom);save();
   await remote('duty',l);
   gpsStart();await gpsSend();RT.track();
-  toast('Vous êtes en service · position partagée toutes les 2 minutes');
+  toast('Vous êtes en service · position transmise automatiquement');
  }catch(e){gpsHelp(e&&e.code===1?'denied':e&&e.code===0?'unsupported':e&&e.code===3?'timeout':'unavailable')}
  finally{dutyBusy=false;if(cur==='livreur')R.livreur()}
 }
 /* Fin de service (bouton, déconnexion, autorisation retirée, ou décision de l'agence) */
 async function goOffDuty(msg){
- const l=me();gpsStop();
+ const l=me();
+ if(GPS.q.length&&netUp())await gpsFlush().catch(()=>{});            // positions réelles encore en attente
+ gpsStop();
  if(l&&onDuty(l)){l.statut='hors_service';log('livreur','',`${l.nom} a terminé son service (partage de position arrêté)`,l.nom);save();RT.track();await remote('duty',l)}
  if(msg!==false)toast(msg||'Service terminé · partage de position arrêté');
  if(cur==='livreur'&&AUTH)R.livreur();
@@ -1207,8 +1276,10 @@ document.addEventListener('visibilitychange',()=>{
  if(!gpsWanted())return;
  if(document.visibilityState==='hidden'){GPS.hiddenAt=Date.now();return}
  const h=GPS.hiddenAt;GPS.hiddenAt=null;FEGeo.resume().then(s=>{if(s){GPS.awake=s;gpsPaint()}});
- if(h&&Date.now()-h>60000&&!FEGeo.backgroundCapable)GPS.suspended={from:h,to:Date.now()};
- FEGeo.getCurrent({enableHighAccuracy:true,timeout:15000,maximumAge:30000}).then(p=>{GPS.last=p;GPS.lastSent=0;gpsSend()}).catch(e=>{if(e&&e.code===1)gpsLost('denied')});
+ const long=h&&Date.now()-h>60000;
+ if(long&&!FEGeo.backgroundCapable)GPS.suspended={from:h,to:Date.now()};
+ FEGeo.getCurrent({enableHighAccuracy:true,timeout:15000,maximumAge:30000}).then(p=>{if(!gpsWanted())return;GPS.last=p;GPS.err='';if(long||gpsDue(p))gpsSend();else gpsPaint()}).catch(e=>{if(e&&e.code===1)gpsLost('denied')});
+ if(GPS.q.length)gpsFlush();
  if(cur==='livreur'&&!drvSheet)R.livreur();else gpsPaint();
 });
 if(window.FEGeo)FEGeo.onPermissionChange(st=>{if(st==='denied'&&gpsWanted())gpsLost('denied')});
@@ -1218,22 +1289,28 @@ function dutyCardHtml(l,full){
  if(!l)return'';
  if(!onDuty(l))return`<div class="mcard duty-off">
   <b style="font-size:15px">Vous êtes hors service</b>
-  <p class="small" style="margin:0;line-height:1.5">Pour recevoir des livraisons, passez en service. <b>Le partage de votre position est obligatoire pendant le service</b> : elle est envoyée à FAST EXPRESS toutes les 2 minutes, et n'est plus partagée dès que vous terminez votre service ou vous déconnectez.</p>
+  <p class="small" style="margin:0;line-height:1.5">Pour recevoir des livraisons, passez en service. <b>Le partage de votre position est obligatoire pendant le service</b> : elle est transmise automatiquement à FAST EXPRESS quand vous vous déplacez et au moins toutes les 2 minutes, et n'est plus partagée dès que vous terminez votre service ou vous déconnectez.</p>
   ${DRVREQ?`<div class="banner">${ic('pin',16)}<span>L'agence a demandé votre position à ${hm(DRVREQ.at)} : passez en service pour la partager.</span></div>`:''}
   <button class="bigbtn pri" id="dutyOn" ${dutyBusy?'disabled':''}>${ic('pin',18)}${dutyBusy?'Recherche de votre position…':'Passer en service'}</button>
   <p class="small muted" style="margin:0">Votre téléphone va demander l'autorisation de localisation : touchez « Autoriser ».</p></div>`;
  return`<div class="mcard" id="gpsCard">${gpsStatusHtml(l)}</div>${full?`<button class="bigbtn" id="dutyOff">${ic('x',18)}Terminer mon service</button>`:''}`}
 function gpsStatusHtml(l){
- const on=gpsWanted()&&(GPS.watch!=null||GPS.starting);const okSend=on&&!GPS.err&&GPS.sentAt;
- const txt=GPS.err?GPS.err:GPS.sentAt?`Position envoyée à ${hm(GPS.sentAt)}${GPS.last?.coords?.accuracy?` · précision ${Math.round(GPS.last.coords.accuracy)} m`:''}${GPS.far&&MODE==='demo'?' · hors de Libreville (non affichée sur la carte de démo)':''}`:'Recherche de votre position…';
+ const on=gpsWanted()&&(GPS.watch!=null||GPS.starting);const off=GPS.net==='offline'||!netUp();
+ const okSend=on&&!off&&!GPS.err&&!GPS.sendErr&&GPS.sentAt;
+ const head=off?'Hors ligne · position gardée en attente':okSend?'position transmise automatiquement':'position non envoyée';
+ const txt=GPS.err?GPS.err:GPS.sentAt?`Dernière position transmise à ${hm(GPS.sentAt)}${GPS.last?.coords?.accuracy?` · précision ${Math.round(GPS.last.coords.accuracy)} m`:''}${GPS.far&&MODE==='demo'?' · hors de Libreville (non affichée sur la carte de démo)':''}`:'Recherche de votre position…';
  const awake=GPS.awake==='on'?'Écran maintenu allumé pendant le service.':GPS.awake==='native'?'':GPS.awake?'Impossible de garder l\'écran allumé automatiquement : ne verrouillez pas le téléphone.':'';
- return`<div class="row between" style="gap:10px"><span class="row" style="gap:8px"><i style="width:9px;height:9px;border-radius:50%;background:${okSend?'var(--ok)':'var(--warn)'}"></i><b class="small">En service · ${okSend?'position partagée':'position non envoyée'}</b></span>${on?`<button class="btn sm" id="gpsNow">Envoyer maintenant</button>`:''}</div>
-  <p class="small muted" style="margin:0">${esc(txt)} · toutes les ${Math.round(GPS_MS/60000)} min</p>
+ const n=GPS.q.length;
+ return`<div class="row" style="gap:8px"><i style="width:9px;height:9px;border-radius:50%;flex:none;background:${okSend?'var(--ok)':off||GPS.sendErr?'var(--bad)':'var(--warn)'}"></i><b class="small" id="gpsHead">En service · ${head}</b></div>
+  <p class="small muted" style="margin:0">${esc(txt)}</p>
+  <p class="small muted" style="margin:0">Envoi automatique, sans action de votre part : à chaque déplacement et au moins toutes les ${Math.round(GPS_MS/60000)} min.</p>
+  ${off?`<div class="banner" id="gpsOffline" style="background:var(--bad-soft,#fde8e5);color:var(--bad)">${ic('alert',16)}<span><b>Pas de connexion Internet.</b> ${n?`${n} position${n>1?'s':''} en attente : `:''}l'envoi reprendra automatiquement dès le retour de la connexion.</span></div>`:''}
+  ${GPS.sendErr&&!off?`<div class="banner" style="background:var(--warn-soft);color:var(--warn)">${ic('alert',16)}<span>Position refusée par le serveur : ${esc(GPS.sendErr)}. Prévenez l'agence.</span></div>`:''}
   ${GPS.suspended?`<div class="banner" style="background:var(--warn-soft);color:var(--warn)">${ic('alert',16)}<span>Le navigateur a suspendu la localisation pendant ${Math.max(1,Math.round((GPS.suspended.to-GPS.suspended.from)/60000))} min (de ${hm(GPS.suspended.from)} à ${hm(GPS.suspended.to)}) : votre position n'a pas été envoyée pendant ce temps. <button class="lnk" id="gpsSusOk" style="font-family:var(--f-body)">Compris</button></span></div>`:''}
-  ${FEGeo.backgroundCapable?'':`<p class="small" style="margin:0;color:var(--warn)">${ic('alert',13).replace('class="ic"','class="ic" style="display:inline;vertical-align:-2px"')} Version web : gardez FAST EXPRESS ouvert et l'écran allumé. Si le téléphone se verrouille ou si vous changez d'application, le navigateur suspend la localisation et votre position n'est plus envoyée.</p>`}
+  ${FEGeo.backgroundCapable?'':`<p class="small" style="margin:0;color:var(--warn)">${ic('alert',13).replace('class="ic"','class="ic" style="display:inline;vertical-align:-2px"')} Version web : gardez FAST EXPRESS ouvert et l'écran allumé. Si le téléphone se verrouille ou si vous changez d'application, le navigateur suspend la localisation et votre position n'est plus envoyée. Le suivi en arrière-plan n'est pas garanti sur Chrome.</p>`}
   ${awake?`<p class="small muted" style="margin:0">${awake}</p>`:''}`}
 function gpsPaint(){const el=document.getElementById('gpsCard');const l=me();if(el&&l&&onDuty(l)){el.innerHTML=gpsStatusHtml(l);gpsBindCard(el)}}
-function gpsBindCard(el){const gn=el.querySelector('#gpsNow');if(gn)gn.onclick=()=>{GPS.lastSent=0;if(GPS.last)gpsSend();else ensureGps()};const so=el.querySelector('#gpsSusOk');if(so)so.onclick=()=>{GPS.suspended=null;gpsPaint()}}
+function gpsBindCard(el){const so=el.querySelector('#gpsSusOk');if(so)so.onclick=()=>{GPS.suspended=null;gpsPaint()}}
 /* Aide pour autoriser la géolocalisation (aucun bouton « Refuser » : le livreur reste hors service tant qu'elle n'est pas active) */
 function gpsHelpHtml(reason){
  const T={denied:'Autorisez la localisation',unavailable:'Activez la localisation du téléphone',timeout:'Position introuvable',unsupported:'Localisation non disponible',insecure:'Adresse non sécurisée'}[reason]||'Localisation';
@@ -1306,7 +1383,7 @@ async function onGpsRequest(m){
  const l=me();if(!l)return;
  const ack=state=>{const p={reqId:m.reqId,driverId:l.id,state};if(MODE==='supabase')window.FEDB.gpsAck(p);else if(RT.bus)RT.bus.postMessage({t:'ack',at:Date.now(),...p})};
  if(!onDuty(l)){DRVREQ={from:m.from,at:Date.now()};ack('off_duty');toast('L\'agence demande votre position : passez en service','warn');if(cur==='livreur'&&!drvSheet)R.livreur();return}
- try{const p=await FEGeo.getCurrent({enableHighAccuracy:true,timeout:15000,maximumAge:15000});GPS.last=p;GPS.lastSent=0;await gpsSend();ack('sent');toast('Demande de l\'agence : position envoyée')}
+ try{const p=await FEGeo.getCurrent({enableHighAccuracy:true,timeout:15000,maximumAge:15000});GPS.last=p;GPS.err='';await gpsSend();if(GPS.q.length){toast('Demande de l\'agence : pas de connexion, position en attente d\'envoi','warn');return}ack('sent');toast('Demande de l\'agence : position envoyée')}
  catch(e){if(e&&e.code===1){ack('no_permission');gpsLost('denied')}else{ack('no_fix');GPS.err='Demande de l\'agence : position introuvable';gpsPaint()}}
 }
 /* Côté gestionnaire : état des positions */
@@ -1331,6 +1408,9 @@ function rtRefresh(){
 }
 /* Démo : les livreurs simulés en service envoient leur position toutes les 2 minutes */
 setInterval(()=>{if(MODE!=='demo'||!S)return;S.livreurs.forEach(l=>{if(onDuty(l)&&!l.offline&&!(RT.seen[l.id]&&Date.now()-RT.seen[l.id].at<25000))l.posAt=Date.now()});save()},GPS_MS);
+/* Supabase : relecture de sécurité des positions toutes les 30 s (si le temps réel n'arrive pas) */
+setInterval(()=>{if(MODE!=='supabase'||!AUTH||!isMgr()||!window.FEDB||document.visibilityState!=='visible'||!navigator.onLine)return;
+ window.FEDB.pollLive().then(ch=>{if(ch)onRemoteChange()}).catch(e=>console.warn('[Supabase] relecture des positions',e))},CFG.livePollMs||30000);
 /* Les états « À jour / Ancienne / Indisponible » évoluent avec le temps */
 setInterval(()=>{if(AUTH&&isMgr())rtRefresh()},30000);
 
@@ -1498,7 +1578,7 @@ window.addEventListener('hashchange',route);
 /* Si l'administration et l'espace livreur sont ouverts dans deux onglets, chaque onglet se met à jour */
 window.addEventListener('storage',e=>{
  if(MODE!=='demo'||e.key!==KEY||!e.newValue)return;
- try{const o=JSON.parse(e.newValue);if(o&&o.colis){S=migrate(o);if(drvSheet||modal.classList.contains('on'))return;render();if(openCode&&drawer.classList.contains('on'))renderDrawer()}}catch(x){}
+ try{const o=JSON.parse(e.newValue);if(o&&o.colis){S=migrate(o);if(drvSheet||modal.classList.contains('on'))return;if(cur==='carte'&&AUTH){mapDraw();mapInfo();renderNav()}else render();if(openCode&&drawer.classList.contains('on'))renderDrawer()}}catch(x){}
 });
 /* Démarrage : mode démo (données locales) ou mode Supabase (session existante restaurée) */
 async function boot(){
