@@ -17,7 +17,7 @@ window.FE_CONFIG = {
   allowModeParam: true,
 
   supabaseUrl: 'https://cxrkzvnfbscdcddoatsp.supabase.co',
-  supabaseAnonKey: '',  // clé PUBLIQUE uniquement : « sb_publishable_… » (jamais « sb_secret_… » ni « service_role »)
+  supabaseAnonKey: 'sb_publishable_nogiAvhtY-vpWrMhXW8xjw_smqoWs52',  // clé PUBLIQUE uniquement : « sb_publishable_… » (jamais « sb_secret_… » ni « service_role »)
 
   // Colonnes facultatives : leur existence n'a pas encore été confirmée.
   // Laissez null tant qu'elles ne sont pas confirmées ; indiquez le nom

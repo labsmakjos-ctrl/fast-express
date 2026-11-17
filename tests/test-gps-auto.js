@@ -9,7 +9,7 @@ const LAT=0.3801,LNG=9.4452;
 (async()=>{
 const b=await chromium.launch();const errs=[];
 const realCfg=fs.readFileSync(path.join(__dirname,'..','js','config.js'),'utf8');
-const cfg=realCfg.replace("supabaseAnonKey: ''","supabaseAnonKey: 'sb_publishable_TEST'")
+const cfg=realCfg.replace(/supabaseAnonKey: '[^']*'/,"supabaseAnonKey: 'sb_publishable_TEST'")
  .replace(/gpsIntervalMs: \d+/,'gpsIntervalMs: 8000').replace(/gpsMinGapMs: \d+/,'gpsMinGapMs: 1500').replace(/livePollMs: \d+/,'livePollMs: 2000');
 const fast=realCfg.replace(/gpsIntervalMs: \d+/,'gpsIntervalMs: 8000').replace(/gpsMinGapMs: \d+/,'gpsMinGapMs: 1500');
 /* Hors connexion simulé pour UN onglet (le livreur) : navigator.onLine + événements offline/online */

@@ -9,7 +9,7 @@ const ctx=await b.newContext({viewport:{width:1400,height:900},permissions:['geo
 // configuration réelle (mode démo par défaut) + clé publique de test + faux Supabase à la place de la bibliothèque
 const realCfg=fs.readFileSync(require('path').join(__dirname,'..','js','config.js'),'utf8');
 if(!/mode: 'demo'/.test(realCfg)||/sb_secret_|service_role'/.test(realCfg.replace(/\/\/.*$/gm,'')))throw new Error('config.js : le site doit rester en démo et sans clé secrète');
-const cfg=realCfg.replace("supabaseAnonKey: ''","supabaseAnonKey: 'sb_publishable_TEST'");
+const cfg=realCfg.replace(/supabaseAnonKey: '[^']*'/,"supabaseAnonKey: 'sb_publishable_TEST'");
 await ctx.route('**/js/config.js',r=>r.fulfill({contentType:'application/javascript',body:cfg}));
 await ctx.route('**/vendor/supabase.js',r=>r.fulfill({contentType:'application/javascript',body:fs.readFileSync(D+'mock-supabase.js','utf8')}));
 const p=await ctx.newPage();
@@ -170,7 +170,11 @@ const dp=await d.newPage();dp.on('pageerror',e=>errs.push('démo: '+e.message));
 await dp.goto(BASE);await dp.waitForTimeout(700);
 ok('Lien public sans paramètre : mode démo avec comptes de démonstration',await dp.evaluate(()=>MODE==='demo'&&!!document.querySelector('[data-u]')&&/démonstration/.test(document.querySelector('.mode-pill').textContent)));
 await dp.goto(BASE+'?mode=supabase');await dp.waitForTimeout(700);
+ok('?mode=supabase avec la configuration réelle : écran de connexion Supabase, clé publique seulement',await dp.evaluate(()=>MODE==='supabase'&&!document.querySelector('#login').hidden&&!!document.querySelector('#lg1')&&!document.querySelector('[data-u]')&&/^sb_publishable_/.test(window.__KEY||'')));
+await d.route('**/js/config.js',r=>r.fulfill({contentType:'application/javascript',body:realCfg.replace(/supabaseAnonKey: '[^']*'/,"supabaseAnonKey: ''")}));
+await dp.goto(BASE+'?mode=supabase');await dp.waitForTimeout(700);
 ok('?mode=supabase sans clé publique : écran « Configuration incomplète » + retour démo',await dp.evaluate(()=>MODE==='supabase'&&/Configuration incomplète/.test(document.body.textContent)&&/clé publique est encore vide/.test(document.body.textContent)&&!!document.querySelector('a[href="?mode=demo"]')));
+await d.unroute('**/js/config.js');
 await dp.goto(BASE+'?mode=demo');await dp.waitForTimeout(700);
 ok('?mode=demo : retour à la démonstration',await dp.evaluate(()=>MODE==='demo'&&!!document.querySelector('[data-u]')));
 ok('Aucune erreur JavaScript (contexte démo)',!errs.some(e=>e.startsWith('démo')),errs.join(' | '));
