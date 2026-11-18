@@ -42,7 +42,9 @@ window.FE_CONFIG = {
   proofBucket: null,        // ex. 'delivery-proofs'
 
   // Fonction serveur de suivi public par tracking_token (null = indisponible)
-  trackingRpc: null,        // ex. 'track_parcel'
+  trackingRpc: 'track_parcel',   // fonction sécurisée de suivi public (lecture seule, par jeton secret)
+  trackingBaseUrl: null,         // adresse des liens de suivi ; null = adresse actuelle du site
+  publicRefreshMs: 120000,       // page de suivi client : actualisation toutes les 2 minutes
 
   // Décision 4 : capacité provisoire selon le type de véhicule
   capacities: { moto: 5, scooter: 4, voiture: 8, velo: 3 },

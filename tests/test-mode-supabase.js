@@ -94,9 +94,9 @@ await p.evaluate(()=>logout());await p.waitForTimeout(400);
 await p.fill('#lg1','gts@test.ga');await p.fill('#lg2','secret');await p.click('#lgGo');await p.waitForTimeout(1000);
 ok('Partenaire connecté : partnerId lu dans partners',await p.evaluate(()=>AUTH.role==='partner'&&AUTH.partnerId==='p-1'&&cur==='partenaire'));
 await p.evaluate(()=>logout());await p.waitForTimeout(400);
-// suivi public sans fonction serveur
-await p.goto(URL+'&suivi=tok-a1');await p.waitForTimeout(700);
-ok('Suivi public sans connexion : aucune lecture directe des tables (message d\'attente)',await p.evaluate(()=>cur==='suivi'&&/sera activé/.test(document.querySelector('#view').textContent)));
+// suivi public : jeton au mauvais format → refusé par track_parcel, aucune lecture directe des tables
+await p.goto(URL+'&suivi=tok-a1');await p.waitForTimeout(900);
+ok('Suivi public : jeton non UUID refusé (« lien non valide »), seule la fonction track_parcel est appelée',await p.evaluate(()=>cur==='suivi'&&/n'est pas valide/.test(document.querySelector('#view').textContent)&&(window.__MOCKRPC||[]).some(x=>x.name==='track_parcel'&&x.args.p_token==='tok-a1')&&!(window.__MOCKSEL||[]).length));
 // ---------- nouveaux cas ----------
 await p.goto(URL);await p.waitForTimeout(600);
 // partenaire : tables drivers / driver_locations interdites → chargement quand même

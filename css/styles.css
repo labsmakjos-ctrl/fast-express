@@ -543,6 +543,7 @@ td .sub{display:block;color:var(--muted);font-size:12px}
 /* Suivi public sans connexion : pas de menu latéral */
 .solo .app{grid-template-columns:minmax(0,1fr)}
 .solo .rail,.solo .burger,.solo .top-a,.solo .scrim{display:none!important}
+.solo .top{display:none!important}   /* page publique du client : pas d'en-tête interne de l'application */
 .steps{grid-template-columns:repeat(5,1fr)!important}
 .user{align-items:center}
 
@@ -564,3 +565,10 @@ td .sub{display:block;color:var(--muted);font-size:12px}
 .lmk.pos-lost em{background:var(--bad)}
 .lg-pos{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:-1px;border:2px solid var(--brand)}
 .lg-pos.fresh{background:var(--brand)}.lg-pos.old{background:var(--faint);border-color:var(--faint)}.lg-pos.lost{background:transparent;border-style:dashed;border-color:var(--bad)}
+
+/* Suivi public : carte de la position du livreur */
+.pub-map{height:320px;width:100%;border-radius:14px;overflow:hidden;border:1px solid var(--line);background:var(--surface-2)}
+.pub-map[hidden]{display:none}
+.pub-mk{background:none;border:0}
+#pubMapCard[hidden]{display:none}
+@media (max-width:640px){.pub-map{height:260px}}

@@ -55,7 +55,7 @@ class Q{
   const selCols=(this.cols||'*')==='*'?ALLOWED[t]:this.cols.split(',').map(s=>s.trim()).filter(Boolean);
   const bad=badCols(t,[...used,...selCols]);if(bad.length){LOG.push({t,op:this.op,error:'colonne inconnue '+bad});return err('column '+t+'.'+bad[0]+' does not exist')}
   const match=r=>this.f.every(([c,o,v])=>o==='eq'?r[c]===v:o==='gt'?r[c]>v:v.includes(r[c]));
-  if(this.op==='select'){let rows=DB[t].filter(match);if(this.ord){const [c,a]=this.ord;rows=rows.slice().sort((x,y)=>(x[c]>y[c]?1:x[c]<y[c]?-1:0)*(a?1:-1))}if(this.lim)rows=rows.slice(0,this.lim);rows=rows.map(r=>Object.fromEntries(selCols.map(c=>[c,r[c]??null])));
+  if(this.op==='select'){(window.__MOCKSEL=window.__MOCKSEL||[]).push({t,uid:uid||null});let rows=DB[t].filter(match);if(this.ord){const [c,a]=this.ord;rows=rows.slice().sort((x,y)=>(x[c]>y[c]?1:x[c]<y[c]?-1:0)*(a?1:-1))}if(this.lim)rows=rows.slice(0,this.lim);rows=rows.map(r=>Object.fromEntries(selCols.map(c=>[c,r[c]??null])));
    if(this.one)return{data:rows[0]||null,error:this.one==='single'&&!rows[0]?{message:'no rows'}:null};return{data:rows,error:null}}
   if(this.op==='insert'){window.__REQ=(window.__REQ||[]);window.__REQ.push({t,n:this.rows.length});const out=[];for(const r of this.rows){const b=badCols(t,Object.keys(r));if(b.length){LOG.push({t,op:'insert',error:'colonne inconnue '+b});return err('column "'+b[0]+'" of relation "'+t+'" does not exist')}
     if((t==='parcels'||t==='parcel_events')&&r.status&&!STATUSES.includes(r.status)){LOG.push({t,op:'insert',error:'statut '+r.status});return err('violates check constraint status')}
@@ -68,6 +68,23 @@ class Q{
    const rows=DB[t].filter(match);rows.forEach(r=>{Object.assign(r,this.patch);listeners.forEach(l=>l(t,'UPDATE',r));PGBC.postMessage({t,e:'UPDATE',row:r})});LOG.push({t,op:'update',patch:this.patch,n:rows.length});persist();return{data:null,error:null}}
  }
 }
+/* Même logique que public.track_parcel (SQL validé) : jeton UUID, un seul colis, champs publics seulement,
+   position du livreur seulement si colis in_transit + livreur en service + position < 10 min. */
+function trackParcel(tok){
+ if(typeof tok!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tok))return null;
+ const m=DB.parcels.filter(p=>p.tracking_token===tok);if(m.length!==1)return null;const p=m[0];
+ const st={pending:p.driver_id?'attribue':'en_attente',picked_up:'recupere',in_transit:'en_cours',delivered:'livre',postponed:p.postponed_date?'reporte':'echec',cancelled:'annule'}[p.status]||'inconnu';
+ const pa=DB.partners.find(x=>x.id===p.partner_id);let drv=null,veh=null,pos=null;
+ if(p.driver_id&&['pending','picked_up','in_transit'].includes(p.status)){const d=DB.drivers.find(x=>x.id===p.driver_id);const pr=d&&DB.profiles.find(x=>x.id===d.profile_id);
+  drv=pr&&pr.full_name?String(pr.full_name).trim().split(' ')[0]||null:null;veh=d?d.vehicle_type:null}
+ if(p.status==='in_transit'&&p.driver_id){const d=DB.drivers.find(x=>x.id===p.driver_id);
+  const l=d&&d.is_on_duty===true?DB.driver_locations.filter(x=>x.driver_id===p.driver_id).sort((a,b)=>Date.parse(b.created_at)-Date.parse(a.created_at))[0]:null;const n=Date.now();
+  if(l&&l.lat>=-90&&l.lat<=90&&l.lng>=-180&&l.lng<=180&&Date.parse(l.created_at)>=n-6e5&&Date.parse(l.recorded_at)>=n-6e5&&Date.parse(l.recorded_at)<=n+12e4)
+   pos={lat:Math.round(l.lat*1e5)/1e5,lng:Math.round(l.lng*1e5)/1e5,accuracy_m:l.accuracy>=0&&l.accuracy<=1e5?Math.round(l.accuracy):null,recorded_at:l.recorded_at}}
+ const ev=DB.parcel_events.filter(e=>e.parcel_id===p.id).sort((a,b)=>Date.parse(b.created_at)-Date.parse(a.created_at)).slice(0,100).reverse().map(e=>{const r=e.reason||'';
+  return{status:{pending:/^(Attribué|Réaffecté|Confié)/.test(r)?'attribue':'en_attente',picked_up:'recupere',in_transit:'en_cours',delivered:'livre',postponed:/^Échec/.test(r)?'echec':'reporte',cancelled:'annule'}[e.status]||'inconnu',at:e.created_at}});
+ return{tracking_number:p.tracking_number,status:st,created_at:p.created_at||null,delivered_at:p.delivered_at||null,postponed_date:p.postponed_date?String(p.postponed_date).slice(0,10):null,
+  partner_name:pa?pa.company_name:null,driver_first_name:drv,vehicle_type:veh,driver_position:pos,events:ev,server_time:new Date().toISOString()}}
 let session=JSON.parse(localStorage.getItem('__mocksession')||'null');const AUTHL=window.__AUTHL=[];
 const client={
  from:t=>new Q(t),
@@ -98,7 +115,11 @@ const client={
   return ch},
  removeChannel(ch){if(ch&&ch.bc){try{ch.bc.close()}catch(e){}ch.bc=null}},
  storage:{from:b=>({async upload(path){LOG.push({t:'storage',bucket:b,path});return{data:{path},error:null}},async createSignedUrls(ps){return{data:ps.map(p=>({path:p,signedUrl:'data:image/gif;base64,R0lGODlhAQABAAAAACw='})),error:null}}})},
- async rpc(){return err('function does not exist')},
+ async rpc(name,args){(window.__MOCKRPC=window.__MOCKRPC||[]).push({name,args});
+  if(!navigator.onLine)return err('TypeError: Failed to fetch');
+  if(window.__RPC_DOWN)return err('Service indisponible');
+  if(name!=='track_parcel')return err('function does not exist');
+  return{data:trackParcel(args&&args.p_token),error:null}},
 };
 window.supabase={createClient:(url,key)=>{window.__KEY=key;return client}};
 })();

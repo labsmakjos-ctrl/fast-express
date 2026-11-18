@@ -135,7 +135,13 @@ const km=u=>u*UNIT_KM;
 function fraisCalc(pt,type,poids){let f=1500+Math.round(km(dist(pt||HQ,HQ))*180/100)*100;if(type==='express')f+=1500;if(type==='fragile')f+=1000;if(poids>5)f+=1000;if(poids>15)f+=1500;return Math.round(f/500)*500}
 const initials=n=>String(n||'?').split(/[\s-]+/).filter(Boolean).slice(0,2).map(w=>w[0]).join('').toUpperCase();
 const first=n=>String(n||'').split(' ')[0];
-const uuid=()=>(crypto.randomUUID?crypto.randomUUID():'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return(c==='x'?r:(r&3|8)).toString(16)}));
+/* Jeton secret (UUID v4) : générateur cryptographique UNIQUEMENT (crypto.randomUUID ou crypto.getRandomValues).
+   Sans générateur sûr, aucun jeton n'est créé : jamais de Math.random(). */
+function uuid(){const c=window.crypto;
+ if(c&&typeof c.randomUUID==='function')return c.randomUUID();
+ if(c&&typeof c.getRandomValues==='function'){const b=c.getRandomValues(new Uint8Array(16));b[6]=(b[6]&0x0f)|0x40;b[8]=(b[8]&0x3f)|0x80;
+  const h=[...b].map(x=>x.toString(16).padStart(2,'0')).join('');return`${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`}
+ throw new Error('Ce navigateur ne fournit pas de générateur aléatoire sécurisé : impossible de créer un jeton de suivi. Utilisez un navigateur récent.')}
 const slug=s=>String(s).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,'.').replace(/^\.|\.$/g,'');
 
 /* ---------- État ---------- */
@@ -240,7 +246,13 @@ const lbadge=s=>`<span class="pill ${(LST[s]||LST.hors_service).c}">${(LST[s]||L
 const lstate=l=>l.statut==='disponible'&&charge(l)>=capOf(l)?'<span class="pill p-bad">Capacité atteinte</span>':l.statut==='disponible'&&charge(l)?'<span class="pill p-gold">En tournée</span>':lbadge(l.statut);
 const av=(l,size=36)=>`<span class="av" style="background:${l.couleur};width:${size}px;height:${size}px;font-size:${Math.round(size*.36)}px">${initials(l.nom)}</span>`;
 function log(type,code,text,who){S.log.unshift({t:Date.now(),type,code,text,who:who||me0()})}
-const trackUrl=c=>(CFG.trackingBaseUrl||location.origin+location.pathname)+'?suivi='+encodeURIComponent(c.token||c.code);
+/* Lien individuel du colis : il ouvre directement SA fiche publique (jeton secret). En mode Supabase, le lien
+   contient « mode=supabase » (le site public reste en démo par défaut) ; sans jeton, aucun lien n'est produit. */
+const pubToken=()=>{try{return new URLSearchParams(location.search).get('suivi')||''}catch(e){return''}};
+function trackUrl(c){
+ const t=c&&c.token;if(!t&&MODE==='supabase')return'';
+ const base=CFG.trackingBaseUrl||location.origin+location.pathname;const q=modeQS();
+ return base+(q?q+'&':'?')+'suivi='+encodeURIComponent(t||c.code)}
 /* Synchronisation avec Supabase : chaque action locale est envoyée à la base (aucun effet en mode démo).
    En cas d'erreur, les données sont rechargées depuis Supabase pour rester exactes. */
 function remote(op,...args){
@@ -248,7 +260,7 @@ function remote(op,...args){
  return window.FEDB.run(op,...args).catch(err=>{console.error('[Supabase]',op,err);
   toast('Supabase : '+esc(err.message||'erreur inconnue')+' · données rechargées','warn');
   return window.FEDB.reload().then(()=>refresh()).catch(()=>{})})}
-function fill(t,c,extra={}){const L=LV(c.livreurId);const m={prenom:first(c.dest.nom),nom:c.dest.nom,code:c.code,expediteur:c.exp.nom,livreur:L?L.nom:'notre livreur',tel_livreur:L?L.tel:'',zone:zoneLabel(c),adresse:c.adresse+(c.zone?', '+c.zone:''),lien:trackUrl(c),otp:c.otp,cod:c.cod?fcfa(c.cod):'rien, déjà payé',heure:hm(extra.t||Date.now()),motif:(c.motif||'').toLowerCase(),creneau:(c.report?.creneau||'à convenir').toLowerCase(),...extra};return t.replace(/\{(\w+)\}/g,(a,k)=>m[k]??a)}
+function fill(t,c,extra={}){const L=LV(c.livreurId);const m={prenom:first(c.dest.nom),nom:c.dest.nom,code:c.code,expediteur:c.exp.nom,livreur:L?L.nom:'notre livreur',tel_livreur:L?L.tel:'',zone:zoneLabel(c),adresse:c.adresse+(c.zone?', '+c.zone:''),lien:trackUrl(c)||'(lien de suivi indisponible)',otp:c.otp,cod:c.cod?fcfa(c.cod):'rien, déjà payé',heure:hm(extra.t||Date.now()),motif:(c.motif||'').toLowerCase(),creneau:(c.report?.creneau||'à convenir').toLowerCase(),...extra};return t.replace(/\{(\w+)\}/g,(a,k)=>m[k]??a)}
 function pushWA(c,key,t=Date.now(),silent=false){
  const tp=S.tpl[key];if(!tp||!tp.on)return false;
  const k=c.dest.tel;if(!S.wa[k])S.wa[k]={nom:c.dest.nom,msgs:[]};
@@ -260,7 +272,7 @@ function pushWA(c,key,t=Date.now(),silent=false){
 /* Numéro de suivi. Démo : suite FE-26-xxxxx. Supabase : date + 4 caractères aléatoires (FE-261116-4K7Q),
    car un partenaire ou un livreur ne voit pas tous les colis et ne peut pas connaître le dernier numéro utilisé. */
 const CODE_ALPHA='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-function randCode(n){const a=new Uint32Array(n);(window.crypto||{}).getRandomValues?crypto.getRandomValues(a):a.forEach((_,i)=>a[i]=Math.random()*4294967296);return[...a].map(x=>CODE_ALPHA[x%CODE_ALPHA.length]).join('')}
+function randCode(n){const a=new Uint32Array(n);if(!(window.crypto&&crypto.getRandomValues))throw new Error('Générateur aléatoire sécurisé indisponible dans ce navigateur.');crypto.getRandomValues(a);return[...a].map(x=>CODE_ALPHA[x%CODE_ALPHA.length]).join('')}
 function nextCode(){let code;
  if(MODE==='supabase'){const d=new Date();const ymd=String(d.getFullYear()).slice(2)+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0');
   do{code='FE-'+ymd+'-'+randCode(4)}while(S.colis.some(c=>c.code===code));return code}
@@ -437,9 +449,9 @@ function renderDrawer(){
   <div class="row wrap"><button class="btn" id="drPub">${ic('eye',16)}Voir le suivi public</button>${mgr?`<button class="btn" id="drWa">${ic('chat',16)}Conversation WhatsApp</button>`:''}<button class="btn" id="drLink">Copier le lien de suivi</button></div>
  </div>`;
  $('#drX').onclick=closeAll;
- $('#drPub').onclick=()=>{closeAll();pubCode=c.code;go('suivi')};
+ $('#drPub').onclick=()=>{if(MODE==='supabase'){const u=trackUrl(c);if(!u){toast('Ce colis n\'a pas de jeton de suivi : aucune page publique','warn');return}window.open(u,'_blank','noopener');return}closeAll();pubCode=c.code;go('suivi')};
  const dw=$('#drWa');if(dw)dw.onclick=()=>{closeAll();waSel=c.dest.tel;go('whatsapp')};
- $('#drLink').onclick=()=>{const u=trackUrl(c);navigator.clipboard?.writeText(u).then(()=>toast('Lien de suivi copié'),()=>toast(esc(u),'warn'))};
+ $('#drLink').onclick=()=>{const u=trackUrl(c);if(!u){toast('Ce colis n\'a pas de jeton de suivi : aucun lien','warn');return}navigator.clipboard?.writeText(u).then(()=>toast('Lien de suivi copié'),()=>toast(esc(u),'warn'))};
  const asb=$('#drAssign');if(asb)asb.onclick=()=>{const r=manualAssign(c,LV($('#drL').value));if(!r.ok){toast(esc(r.msg),'warn');return}toast(esc(r.msg));waToast(c,'attribue');refresh()};
  const dra=$('#drAuto');if(dra)dra.onclick=()=>{dra.disabled=true;const r=smartAssign(c);if(r.l){toast(`${c.code} attribué à ${esc(r.l.nom)}`);waToast(c,'attribue')}else toast(esc(r.why||'Attribution impossible'),'warn');refresh()};
  drawer.querySelectorAll('[data-a]').forEach(b=>b.onclick=()=>{
@@ -606,13 +618,14 @@ let cur='tableau';
 function renderNav(){$('#nav').innerHTML=viewsFor().map(v=>v.g?`<div class="nav-h">${v.g}</div>`:`<a href="#${v.id}" class="${v.id===cur?'on':''}" data-v="${v.id}">${ic(v.i,18)}<span>${v.l}</span>${v.cnt&&v.cnt()?`<span class="cnt">${v.cnt()}</span>`:''}</a>`).join('')}
 function go(id){if(location.hash!=='#'+id)location.hash=id;else route()}
 function route(){let h=location.hash.slice(1);if(h==='mobile')h='livreur';
- const pubQ=new URLSearchParams(location.search).get('suivi');
- if(!AUTH){cur=(h==='suivi'||pubQ)?'suivi':'login';if(cur==='login'&&h&&h!=='login')pendingHash=h}
+ const pubQ=pubToken();
+ if(pubQ)cur='suivi';                     // lien individuel : fiche publique, connecté ou non
+ else if(!AUTH){cur=(h==='suivi'||pubQ)?'suivi':'login';if(cur==='login'&&h&&h!=='login')pendingHash=h}
  else if(isDriver())cur='livreur';
  else{const vs=viewsFor().filter(v=>v.id);cur=vs.find(v=>v.id===h)?h:vs[0].id}closeAll();$('#rail').classList.remove('on');$('#scrim').classList.remove('on');render();window.scrollTo(0,0)}
 function render(){
  const login=cur==='login',d=cur==='livreur';
- document.body.classList.toggle('drv-mode',d);document.body.classList.toggle('solo',!AUTH&&cur==='suivi');
+ document.body.classList.toggle('drv-mode',d);document.body.classList.toggle('solo',(!AUTH||!!pubToken())&&cur==='suivi');
  $('#login').hidden=!login;$('.app').hidden=d||login;$('#drv').hidden=!d;
  if(login){renderLogin();return}
  if(d){R.livreur();return}
@@ -1415,20 +1428,21 @@ setInterval(()=>{if(MODE!=='supabase'||!AUTH||!isMgr()||!window.FEDB||document.v
 setInterval(()=>{if(AUTH&&isMgr())rtRefresh()},30000);
 
 /* ---------- Suivi public ---------- */
-let pubCode='',pubErr='',pubRemote=null;
+let pubCode='',pubErr='';
 const pubFind=v=>{v=String(v||'').trim();return CO(v)||S.colis.find(c=>c.token===v)||null};
 R.suivi=()=>{
- const q0=new URLSearchParams(location.search).get('suivi');
- if(q0&&!pubCode&&!pubErr&&!pubRemote){const f=pubFind(q0);if(f)pubCode=f.code;else if(MODE==='supabase'&&!AUTH)return suiviRemote(q0);else pubErr=q0}
- if(MODE==='supabase'&&!AUTH&&!pubRemote)return suiviRemote(null);
- const c=pubCode?CO(pubCode):pubRemote;
- const ex=MODE!=='demo'?[]:[S.colis.find(x=>x.statut==='en_cours'),S.colis.find(x=>x.statut==='livre'&&isToday(x.createdAt)),S.colis.find(x=>x.statut==='attribue'),S.colis.find(x=>x.statut==='echec')].filter(Boolean);
+ if(MODE==='supabase')return suiviPublic(pubToken());
+ /* ----- Mode démo : page de suivi sur les données de démonstration (inchangée, sans heure d'arrivée inventée) ----- */
+ const q0=pubToken();
+ if(q0&&!pubCode&&!pubErr){const f=pubFind(q0);if(f)pubCode=f.code;else pubErr=q0}
+ const c=pubCode?CO(pubCode):null;
+ const ex=[S.colis.find(x=>x.statut==='en_cours'),S.colis.find(x=>x.statut==='livre'&&isToday(x.createdAt)),S.colis.find(x=>x.statut==='attribue'),S.colis.find(x=>x.statut==='echec')].filter(Boolean);
  const L=c?LV(c.livreurId):null;
  const head=c?{en_attente:['Votre colis est enregistré','Il sera confié à un livreur très prochainement.'],attribue:['Un livreur prépare votre livraison','Votre colis sera récupéré à l\'agence puis livré.'],recupere:['Votre colis a été récupéré','Le livreur a votre colis et partira bientôt vers vous.'],en_cours:['Votre colis est en route','Le livreur se dirige vers '+zoneLabel(c)+'. Gardez votre téléphone à portée de main.'],livre:['Colis livré','Remis le '+new Date(c.hist.at(-1).t).toLocaleDateString('fr-FR',{day:'numeric',month:'long'})+' à '+hm(c.hist.at(-1).t)+'.'],echec:['Livraison non aboutie','Motif : '+c.motif+'. Notre équipe vous recontacte pour un nouveau créneau.'],annule:['Envoi annulé',(c.motif?'Motif : '+c.motif+'. ':'')+'Contactez l\'expéditeur pour plus d\'informations.'],reporte:['Livraison reportée','Motif : '+c.motif+'. Nouveau créneau : '+(c.report?.creneau||'à convenir')+'.']}[c.statut]:null;
  $('#view').innerHTML=`
  <div class="pub">
   <div class="pub-hero"><span class="stripe"><i></i><i></i><i></i></span>
-   <div class="row" style="gap:14px">${logoHtml(76)}<div><b style="font-family:var(--f-display);letter-spacing:.05em;font-size:17px;display:block">FAST EXPRESS</b><span class="small" style="color:var(--rail-muted)">Suivi de colis · Libreville</span></div><span class="small hide-sm" style="color:var(--rail-muted);margin-left:auto">fastexpress.ga/suivi</span></div>
+   <div class="row" style="gap:14px">${logoHtml(76)}<div><b style="font-family:var(--f-display);letter-spacing:.05em;font-size:17px;display:block">FAST EXPRESS</b><span class="small" style="color:var(--rail-muted)">Suivi de colis · Libreville</span></div></div>
    <h2>Où est mon colis ?</h2><p>Saisissez le numéro de suivi reçu par WhatsApp ou SMS. Il commence par FE-26.</p>
    <form class="pub-form" id="pF"><input id="pIn" value="${esc(pubCode)}" placeholder="FE-26-18421" aria-label="Numéro de suivi" autocomplete="off"><button class="btn gold" type="button" id="pGo">${ic('search',16)}Suivre</button></form>
    <div class="pub-ex">Exemples :${ex.map(x=>`<button data-ex="${x.code}">${x.code}</button>`).join('')}</div>
@@ -1437,7 +1451,6 @@ R.suivi=()=>{
   ${c?`<div class="pub-res">
    <div class="card"><div class="card-b stack" style="gap:16px"><div class="row between wrap"><span class="mono muted">${c.code}</span>${badge(c.statut)}</div><div><div class="big-st">${head[0]}</div><p class="muted" style="margin:6px 0 0">${esc(head[1])}</p></div>${stepsHtml(c)}
     <dl class="kv"><dt>Destinataire</dt><dd>${esc(first(c.dest.nom))} ${esc(c.dest.nom.split(' ').slice(1).join(' ')[0]||'')}.</dd><dt>Quartier</dt><dd>${esc(zoneLabel(c))}</dd><dt>Expéditeur</dt><dd>${esc(c.exp.nom)}</dd>${L&&ACTIVE.includes(c.statut)?`<dt>Livreur</dt><dd>${esc(first(L.nom))} · ${esc(L.vehicule.split(' ')[0])}</dd>`:''}${HAS.cod&&c.cod&&c.statut!=='livre'?`<dt>À régler</dt><dd><b>${fcfa(c.cod)}</b> en espèces ou Mobile Money</dd>`:''}</dl>
-    ${c.statut==='en_cours'?`<div class="quote"><span class="small"><b style="font-size:13px;color:var(--fg);font-family:var(--f-body)">Arrivée estimée</b><br><span class="muted">Selon la circulation à Libreville</span></span><b class="num">${hm(c.hist.at(-1).t+35*MIN)} – ${hm(c.hist.at(-1).t+65*MIN)}</b></div>`:''}
    </div></div>
    <div class="card"><div class="card-h"><h2>Étapes</h2></div><div class="card-b">${tlHtml(c,true)}</div></div>
   </div>`:!pubErr?`<div class="card"><div class="empty">${ic('box',28)}Entrez un numéro de suivi ou choisissez un exemple ci-dessus.</div></div>`:''}
@@ -1446,16 +1459,121 @@ R.suivi=()=>{
  document.querySelectorAll('[data-ex]').forEach(b=>b.onclick=()=>{pubCode=b.dataset.ex;pubErr='';R.suivi()});
 };
 
-/* Suivi public en mode Supabase sans connexion : uniquement par une fonction serveur sécurisée (jamais d'accès direct aux tables) */
-async function suiviRemote(token){
+/* =====================================================================
+   Suivi public en mode Supabase : UNE fiche par colis, ouverte par son lien individuel.
+   - Seule source : la réponse de la fonction sécurisée track_parcel(p_token). Aucune lecture
+     directe des tables, aucune donnée de démonstration, aucune donnée du client.
+   - Position du livreur : affichée seulement si la fonction la renvoie (colis en route, livreur
+     en service, position de moins de 10 minutes) ET si elle a toujours moins de 10 minutes.
+     Jamais de position, d'heure d'arrivée ou de destination inventée.
+   - Actualisation automatique toutes les 2 minutes (pause quand la page est cachée).
+   ===================================================================== */
+const PUB_MS=CFG.publicRefreshMs||120000;
+const PUB_MAX_AGE=10*MIN;
+const PUB={token:null,data:null,fetchedAt:0,lastTry:0,loading:false,invalid:false,err:false,map:null,mk:null,circle:null};
+const PUB_HEAD={
+ en_attente:['Votre colis est enregistré','Il sera confié à un livreur très prochainement.'],
+ attribue:['Un livreur prépare votre livraison','Votre colis sera récupéré à l\'agence puis livré.'],
+ recupere:['Votre colis a été récupéré','Le livreur a votre colis et partira bientôt vers vous.'],
+ en_cours:['Votre colis est en route','Le livreur est en route vers vous. Gardez votre téléphone à portée de main.'],
+ livre:['Colis livré','Votre colis a été remis.'],
+ echec:['Livraison non aboutie','Notre équipe vous recontacte pour convenir d\'un nouveau créneau.'],
+ reporte:['Livraison reportée','Une nouvelle date vous sera communiquée.'],
+ annule:['Envoi annulé','Contactez l\'expéditeur pour plus d\'informations.'],
+ inconnu:['Suivi de votre colis','Le statut de votre colis est en cours de mise à jour.']};
+const PUB_EV={en_attente:'Colis enregistré par FAST EXPRESS',attribue:'Un livreur FAST EXPRESS a été désigné',recupere:'Colis récupéré par le livreur',
+ en_cours:'Livraison en cours',livre:'Colis remis',echec:'Livraison non aboutie',reporte:'Livraison reportée',annule:'Envoi annulé',inconnu:'Mise à jour du suivi'};
+const pubTs=v=>{const t=Date.parse(v);return Number.isFinite(t)?t:null};
+const pubDate=t=>new Date(t).toLocaleDateString('fr-FR',{day:'numeric',month:'long'});
+/* « 2026-11-20 » (colonne date) → date locale, sans décalage de fuseau */
+const pubDay=v=>{const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(v||''));return m?new Date(+m[1],+m[2]-1,+m[3]).toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'}):''};
+function pubShell(title,sub,inner){return`<div class="pub" id="pubShell"><div class="pub-hero"><span class="stripe"><i></i><i></i><i></i></span><div class="row" style="gap:14px">${logoHtml(76)}<div><b style="font-family:var(--f-display);letter-spacing:.05em;font-size:17px;display:block">FAST EXPRESS</b><span class="small" style="color:var(--rail-muted)">Suivi de colis · Libreville</span></div></div><h2>${esc(title)}</h2>${sub?`<p>${esc(sub)}</p>`:''}</div>${inner}</div>`}
+const pubCard=(icon,html)=>`<div class="card"><div class="empty">${ic(icon,28)}${html}</div></div>`;
+function pubMapDestroy(){if(PUB.map){try{PUB.map.remove()}catch(e){}}PUB.map=null;PUB.mk=null;PUB.circle=null}
+function pubReset(token){pubMapDestroy();Object.assign(PUB,{token,data:null,fetchedAt:0,lastTry:0,loading:false,invalid:false,err:false})}
+function suiviPublic(token){
  const v=$('#view');
- const shell=inner=>`<div class="pub"><div class="pub-hero"><span class="stripe"><i></i><i></i><i></i></span><div class="row" style="gap:14px">${logoHtml(76)}<div><b style="font-family:var(--f-display);letter-spacing:.05em;font-size:17px;display:block">FAST EXPRESS</b><span class="small" style="color:var(--rail-muted)">Suivi de colis · Libreville</span></div></div><h2>Où est mon colis ?</h2><p>Ouvrez le lien de suivi reçu par WhatsApp ou SMS.</p></div>${inner}</div>`;
- if(!CFG.trackingRpc){v.innerHTML=shell(`<div class="card"><div class="empty">${ic('clock',28)}<b style="color:var(--fg)">Le suivi public sera activé prochainement.</b><br>Il passera par une fonction sécurisée de Supabase, qui ne montre que les informations utiles au client.</div></div>`);return}
- if(!token){v.innerHTML=shell(`<div class="card"><div class="empty">${ic('box',28)}Utilisez le lien de suivi reçu avec votre colis.</div></div>`);return}
- v.innerHTML=shell(`<div class="card"><div class="empty">Recherche de votre colis…</div></div>`);
- try{const c=await window.FEDB.track(token);if(!c){v.innerHTML=shell(`<div class="card"><div class="empty">${ic('alert',28)}Ce lien de suivi n'est pas valide.</div></div>`);return}
-  pubRemote=c;pubCode='';pubErr='';R.suivi()}catch(e){v.innerHTML=shell(`<div class="card"><div class="empty">${ic('alert',28)}Suivi momentanément indisponible.</div></div>`)}
+ if(!token){pubReset(null);
+  v.innerHTML=pubShell('Où est mon colis ?','',pubCard('box',AUTH&&isMgr()?'<b style="color:var(--fg)">Chaque colis a sa propre page de suivi.</b><br>Ouvrez un colis, puis « Voir le suivi public » ou « Copier le lien de suivi » pour l\'envoyer au client.':'Ouvrez le lien de suivi reçu par WhatsApp ou SMS : il affiche directement la page de votre colis.'));return}
+ if(!CFG.trackingRpc){pubReset(null);v.innerHTML=pubShell('Où est mon colis ?','',pubCard('clock','<b style="color:var(--fg)">Le suivi public sera activé prochainement.</b>'));return}
+ if(PUB.token!==token)pubReset(token);
+ pubPaint();
+ if(!PUB.data&&!PUB.invalid&&!PUB.loading)pubFetch();
 }
+async function pubFetch(){
+ if(!PUB.token||PUB.loading)return;const token=PUB.token;PUB.loading=true;PUB.lastTry=Date.now();
+ try{const d=await window.FEDB.track(token);if(PUB.token!==token)return;
+  if(!d){PUB.data=null;PUB.invalid=true}else{PUB.data=d;PUB.invalid=false;PUB.err=false;PUB.fetchedAt=Date.now()}}
+ catch(e){console.warn('[FAST EXPRESS] suivi public',e);if(PUB.token===token)PUB.err=true}
+ finally{if(PUB.token===token)PUB.loading=false}
+ if(MODE==='supabase'&&cur==='suivi'&&PUB.token===token)pubPaint();
+}
+/* Position du livreur affichable : renvoyée par la fonction ET encore récente (moins de 10 min),
+   âge calculé avec l'heure du serveur (pas celle du téléphone du client). */
+function pubPos(){
+ const d=PUB.data,p=d&&d.driver_position;if(!p||d.status!=='en_cours')return null;
+ const lat=Number(p.lat),lng=Number(p.lng),rec=pubTs(p.recorded_at),srv=pubTs(d.server_time);
+ if(!(lat>=-90&&lat<=90&&lng>=-180&&lng<=180)||rec==null||srv==null)return null;
+ const age=Math.max(0,srv-rec)+Math.max(0,Date.now()-PUB.fetchedAt);
+ if(age>PUB_MAX_AGE)return null;
+ const acc=Number(p.accuracy_m);return{lat,lng,rec,age,acc:Number.isFinite(acc)&&acc>0?acc:null}}
+function pubAge(ms){const m=Math.floor(ms/60000);return m<1?'il y a moins d\'une minute':`il y a ${m} min`}
+function pubPaint(){
+ const v=$('#view');const d=PUB.data;
+ if(PUB.invalid){pubMapDestroy();v.innerHTML=pubShell('Lien de suivi non valide','',pubCard('alert','<b style="color:var(--fg)">Ce lien de suivi n\'est pas valide.</b><br>Vérifiez le lien reçu par WhatsApp ou SMS, ou contactez l\'agence au +241 011 44 20 20.'));return}
+ if(!d){pubMapDestroy();v.innerHTML=pubShell('Où est mon colis ?','',PUB.err?pubCard('alert','<b style="color:var(--fg)">Suivi momentanément indisponible.</b><br>Vérifiez votre connexion Internet : nouvel essai automatique.'):pubCard('clock','Recherche de votre colis…'));return}
+ const st=PUB_HEAD[d.status]?d.status:'inconnu';
+ if(!document.getElementById('pubPage')){pubMapDestroy();
+  v.innerHTML=`<div class="pub" id="pubPage"><div class="pub-hero" id="pubHero"></div>
+   <div class="pub-res"><div class="stack" style="gap:16px;min-width:0"><div class="card" id="pubStatus"></div>
+    <div class="card" id="pubMapCard" hidden><div class="card-h"><h2>Position du livreur</h2></div><div class="card-b stack" style="gap:10px"><div id="pubMap" class="pub-map" role="region" aria-label="Carte : position du livreur"></div><p class="small" id="pubMapNote" style="margin:0"></p></div></div></div>
+    <div class="card"><div class="card-h"><h2>Étapes</h2></div><div class="card-b" id="pubTl"></div></div></div>
+   <p class="small muted" id="pubFoot" style="margin:0;text-align:center"></p></div>`}
+ let [title,sub]=PUB_HEAD[st];
+ const del=pubTs(d.delivered_at);if(st==='livre'&&del)sub=`Remis le ${pubDate(del)} à ${hm(del)}.`;
+ if(st==='reporte'&&pubDay(d.postponed_date))sub=`Nouvelle date prévue : ${pubDay(d.postponed_date)}.`;
+ $('#pubHero').innerHTML=`<span class="stripe"><i></i><i></i><i></i></span><div class="row" style="gap:14px">${logoHtml(76)}<div><b style="font-family:var(--f-display);letter-spacing:.05em;font-size:17px;display:block">FAST EXPRESS</b><span class="small" style="color:var(--rail-muted)">Suivi de colis · Libreville</span></div></div><h2>${esc(title)}</h2><p>${esc(sub)}</p>`;
+ const created=pubTs(d.created_at);
+ $('#pubStatus').innerHTML=`<div class="card-b stack" style="gap:16px"><div class="row between wrap"><span class="mono muted" id="pubCode">${esc(d.tracking_number||'')}</span>${ST[st]?badge(st):''}</div>${stepsHtml({statut:st})}
+  <dl class="kv">${d.partner_name?`<dt>Expéditeur</dt><dd>${esc(d.partner_name)}</dd>`:''}${d.driver_first_name&&ACTIVE.includes(st)?`<dt>Livreur</dt><dd id="pubDriver">${esc(d.driver_first_name)}${d.vehicle_type?' · '+esc(d.vehicle_type):''}</dd>`:''}${created?`<dt>Enregistré le</dt><dd>${pubDate(created)} à ${hm(created)}</dd>`:''}</dl></div>`;
+ const evs=(Array.isArray(d.events)?d.events:[]).map(e=>({s:PUB_EV[e&&e.status]?e.status:'inconnu',t:pubTs(e&&e.at)})).filter(e=>e.t).reverse();
+ $('#pubTl').innerHTML=evs.length?`<div class="tl">${evs.map((e,i)=>`<div class="tl-i ${i===0?(['echec','annule','reporte'].includes(e.s)?'bad':'last'):''}"><b>${ST[e.s]?ST[e.s].l:'Mise à jour'}</b><p>${PUB_EV[e.s]}</p><small>${dayLabel(e.t)} · ${hm(e.t)}</small></div>`).join('')}</div>`:'<p class="small muted" style="margin:0">Aucune étape enregistrée pour le moment.</p>';
+ pubMapPaint();pubFootPaint();
+}
+function pubFootPaint(){const f=document.getElementById('pubFoot');if(!f||!PUB.data)return;
+ f.innerHTML=(PUB.err?`<b style="color:var(--warn)">Connexion perdue : informations du ${hm(PUB.fetchedAt)}. Nouvel essai automatique.</b> `:`Informations mises à jour à ${hm(PUB.fetchedAt)}. `)+`Actualisation automatique toutes les ${PUB_MS>=60000?Math.round(PUB_MS/60000)+' min':Math.round(PUB_MS/1000)+' s'}.`}
+function pubMapPaint(){
+ const card=document.getElementById('pubMapCard'),box=document.getElementById('pubMap'),note=document.getElementById('pubMapNote');if(!card)return;
+ const d=PUB.data;if(!d||d.status!=='en_cours'){card.hidden=true;pubMapDestroy();return}
+ card.hidden=false;const p=pubPos();
+ if(!p){box.hidden=true;pubMapDestroy();note.innerHTML=`${ic('clock',14).replace('class="ic"','class="ic" style="display:inline;vertical-align:-2px"')} Position du livreur momentanément indisponible. Elle s'affichera ici dès que le livreur partagera une position récente.`;return}
+ box.hidden=false;
+ if(typeof L==='undefined'){note.textContent=`Carte indisponible. Position du livreur reçue à ${hm(p.rec)} (${pubAge(p.age)}).`;return}
+ const ll=[p.lat,p.lng];
+ if(!PUB.map){
+  PUB.map=L.map(box,{zoomControl:true,attributionControl:true,scrollWheelZoom:false}).setView(ll,15);
+  L.tileLayer(TILES.osm.u,TILES.osm.o).addTo(PUB.map);
+  setTimeout(()=>{if(PUB.map)PUB.map.invalidateSize()},60);
+ }
+ const ini=esc(String(d.driver_first_name||'L').trim().charAt(0).toUpperCase()||'L');
+ if(!PUB.mk)PUB.mk=L.marker(ll,{icon:L.divIcon({className:'lmk pos-fresh pub-mk',html:`<span style="background:#0c6c49">${ini}</span>`,iconSize:[30,30]}),title:'Position du livreur',keyboard:false}).addTo(PUB.map);
+ else PUB.mk.setLatLng(ll);
+ if(p.acc&&p.acc<=1000){if(!PUB.circle)PUB.circle=L.circle(ll,{radius:p.acc,color:'#0c6c49',weight:1,fillOpacity:.08,interactive:false}).addTo(PUB.map);else{PUB.circle.setLatLng(ll);PUB.circle.setRadius(p.acc)}}
+ else if(PUB.circle){PUB.circle.remove();PUB.circle=null}
+ if(!PUB.map.getBounds().pad(-0.15).contains(ll))PUB.map.panTo(ll);
+ note.innerHTML=`Position du livreur à <b>${hm(p.rec)}</b> (${pubAge(p.age)})${p.acc?` · précision ${Math.round(p.acc)} m`:''}. Seule la position récente du livreur est affichée.`;
+}
+/* Actualisation : toutes les 2 minutes tant que la page est visible ; au retour sur la page, immédiatement */
+setInterval(()=>{
+ if(MODE!=='supabase'||cur!=='suivi'||!PUB.token||PUB.invalid)return;
+ if(PUB.data){pubMapPaint();pubFootPaint()}                 // l'âge de la position avance : retrait au-delà de 10 min
+ if(document.visibilityState!=='visible')return;
+ if(Date.now()-PUB.lastTry>=PUB_MS-250)pubFetch();
+},Math.max(500,Math.min(15000,Math.round(PUB_MS/4))));
+document.addEventListener('visibilitychange',()=>{
+ if(document.visibilityState!=='visible'||MODE!=='supabase'||cur!=='suivi'||!PUB.token||PUB.invalid)return;
+ if(Date.now()-PUB.lastTry>15000)pubFetch();
+});
 
 /* =========================================================
    Espace partenaire : tableau de bord

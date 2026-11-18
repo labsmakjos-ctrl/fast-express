@@ -423,12 +423,16 @@
     gpsStatus = 'off';
   }
 
-  /* ---------- Suivi public par tracking_token (fonction serveur à créer, voir README) ---------- */
+  /* ---------- Suivi public par tracking_token : fonction sécurisée public.track_parcel ---------- */
+  /* Renvoie la réponse PUBLIQUE de track_parcel telle quelle (statut, étapes, position récente du livreur…),
+     ou null si le lien n'est pas valide. Aucune lecture directe des tables. */
   async function track(token) {
     if (!CFG.trackingRpc) return null;
     const data = check(await client().rpc(CFG.trackingRpc, { p_token: token }), 'Suivi');
-    const row = Array.isArray(data) ? data[0] : data; if (!row) return null;
-    return mapParcel(row, row.events || [], [{ id: row.partner_id, company_name: row.partner_name || 'FAST EXPRESS', contact_phone: '' }], {});
+    const d = Array.isArray(data) ? data[0] : data;
+    if (d == null) return null;
+    if (typeof d !== 'object' || typeof d.status !== 'string' || !Array.isArray(d.events)) throw new Error('Suivi : réponse inattendue du serveur');
+    return d;
   }
 
   window.FEDB = { configured, signIn, signOut, restore, onAuth, loadAll, gpsJoin, gpsTrack, gpsRequest, gpsAck, gpsLeave, gpsState: () => gpsStatus, reload: loadAll, run, subscribe, unsubscribe, pollLive, track,
