@@ -28,7 +28,7 @@ const cd=await ctxWith(null);const p=await cd.newPage();track(p);
 await p.goto(BASE);await p.evaluate(()=>localStorage.clear());await p.reload();await p.waitForTimeout(500);
 await p.click('[data-u="gabon.tech.store@fastexpress.demo"]');await p.click('#lgGo');await p.waitForTimeout(500);
 ok('Démo : partenaire → tableau de bord',await p.evaluate(()=>cur==='partenaire'&&AUTH.role==='partner'));
-ok('Menu partenaire complet (7 pages), sans pages du manager',await p.evaluate(()=>[...document.querySelectorAll('#nav a')].map(a=>a.dataset.v).join(','))==='partenaire,colis,psuivi,phisto,preleves,pentreprise,suivi');
+ok('Menu partenaire (6 pages), sans page « Suivi client » ni pages du manager',await p.evaluate(()=>[...document.querySelectorAll('#nav a')].map(a=>a.dataset.v).join(','))==='partenaire,colis,psuivi,phisto,preleves,pentreprise');
 const k=await p.evaluate(()=>{const m=S.colis.filter(c=>c.partnerId===AUTH.partnerId);const n=l=>m.filter(c=>l.includes(c.statut)).length;const v=id=>document.querySelector('#'+id+' .v').textContent.replace(/\s/g,'');
  return{ok:v('pkTotal')===String(m.length)&&v('pkAttente')===String(n(['en_attente','attribue','recupere']))&&v('pkRoute')===String(n(['en_cours']))&&v('pkLivres')===String(n(['livre']))&&v('pkAnnules')===String(n(['annule']))&&v('pkReportes')===String(n(['reporte'])),
   others:S.colis.filter(c=>c.partnerId!==AUTH.partnerId).length,total:S.colis.length,shown:v('pkTotal')}});
@@ -57,7 +57,7 @@ ok('WhatsApp : lien wa.me vers le destinataire (+241) avec le lien de suivi',/^h
 ok('WhatsApp : le message ne contient pas le code de remise',!decodeURIComponent(wa).includes(' '+created.otp));
 await p.click('#pcOpen');await p.waitForTimeout(300);
 const dr=await p.evaluate(()=>{const d=document.querySelector('#drawer');return{t:d.textContent,share:!!d.querySelector('#drWaShare'),otpBox:!!d.querySelector('#drOtpBox')}});
-ok('Fiche : destinataire, repère, n°, date de création, historique, lien, partage WhatsApp',dr.share&&dr.t.includes('Sandrine Moussavou')&&dr.t.includes('Face à la station Total')&&dr.t.includes(created.code)&&/Enregistré/.test(dr.t)&&/Historique du colis/.test(dr.t)&&/Copier le lien de suivi/.test(dr.t));
+ok('Fiche : destinataire, repère, n°, date de création, historique, lien, partage WhatsApp',dr.share&&dr.t.includes('Sandrine Moussavou')&&dr.t.includes('Face à la station Total')&&dr.t.includes(created.code)&&/Enregistré/.test(dr.t)&&/Historique du colis/.test(dr.t)&&/Copier le lien pour le client/.test(dr.t)&&/Aperçu de la page client/.test(dr.t)&&/sert uniquement à informer votre client/.test(dr.t));
 ok('Fiche partenaire : aucun code de remise (ni bloc, ni valeur)',!dr.otpBox&&!/Code de remise/.test(dr.t)&&!dr.t.includes(created.otp));
 await p.evaluate(()=>closeAll());
 // Mes colis : recherche
@@ -67,10 +67,18 @@ ok('Mes colis : le nouveau colis est listé',(await view(p)).includes(created.co
 await p.evaluate(()=>{const c=S.colis.find(x=>x.partnerId===AUTH.partnerId&&x.code!==S.colis[0].code)||S.colis[0];const l=S.livreurs[0];l.statut='disponible';c.livreurId=l.id;c.statut='en_cours';c.hist.push({t:Date.now(),s:'en_cours',note:'test'});l.posAt=Date.now()-60000;window.__PSC=c.code;save()});
 await p.evaluate(()=>location.hash='psuivi');await p.waitForTimeout(600);
 const ps=await p.evaluate(()=>({mk:Object.keys(PSV.mk),t:document.querySelector('#psList').textContent,code:window.__PSC}));
-ok('Suivi en direct (démo) : marqueur pour le colis en livraison',ps.mk.includes(ps.code)&&/Position de \d\d:\d\d/.test(ps.t),JSON.stringify(ps.mk));
+ok('Suivi en direct (démo) : marqueur pour le colis en livraison',ps.mk.includes(ps.code)&&/Dernière position GPS : \d\d:\d\d/.test(ps.t),JSON.stringify(ps.mk));
+ok('Suivi en direct : aucune demande de lien de suivi au partenaire',!/lien de suivi reçu|Ouvrez le lien/i.test(await view(p))&&!(await p.$('[data-pspub]')));
+await p.evaluate(()=>PSV.map.setView([0.2,9.2],10));
+await p.click(`[data-psc="${ps.code}"] .small`);await p.waitForTimeout(200);
+ok('Suivi en direct : cliquer sur un colis centre la carte sur son livreur',await p.evaluate(c=>{const m=PSV.mk[c],z=PSV.map;return PSV.sel===c&&z.getZoom()===16&&z.getCenter().distanceTo(m.getLatLng())<5},ps.code));
+await p.click(`[data-psshare="${ps.code}"]`);await p.waitForTimeout(100);
+ok('Suivi en direct : « Partager au client » ouvre WhatsApp avec le lien de suivi',await p.evaluate(c=>{const u=decodeURIComponent(window.__OPENED.at(-1)||'');return/^https:\/\/wa\.me\//.test(u)&&u.includes('suivi='+CO(c).token)},ps.code));
 await p.evaluate(()=>{S.livreurs[0].posAt=Date.now()-30*60000;psPaint()});await p.waitForTimeout(100);
 const ps2=await p.evaluate(()=>({mk:Object.keys(PSV.mk),t:document.querySelector('#psList').textContent}));
-ok('Suivi en direct : position trop ancienne → « indisponible », marqueur retiré',ps2.mk.length===0&&/indisponible ou trop ancienne/.test(ps2.t));
+ok('Suivi en direct : position trop ancienne → « Position indisponible », marqueur retiré',ps2.mk.length===0&&/Position indisponible/.test(ps2.t));
+await p.evaluate(()=>location.hash='suivi');await p.waitForTimeout(250);
+ok('Ancien favori #suivi → « Suivi en direct » (pas la page client)',await p.evaluate(()=>cur==='psuivi'));
 // historique
 await p.evaluate(()=>{const m=S.colis.filter(c=>c.partnerId===AUTH.partnerId);const c=m.find(x=>x.statut==='en_attente');if(c){c.statut='annule';c.motif='Annulé par le partenaire';c.hist.push({t:Date.now(),s:'annule',note:''})}save()});
 await p.evaluate(()=>{PH={q:'',s:'tous',p:'tout'};location.hash='phisto'});await p.waitForTimeout(300);
@@ -147,17 +155,34 @@ const selBefore=await q.evaluate(()=>(window.__MOCKSEL||[]).filter(x=>x.t==='dri
 const rpcBefore=await q.evaluate(()=>(window.__MOCKRPC||[]).length);
 await q.evaluate(()=>location.hash='psuivi');await q.waitForTimeout(1200);
 const sv=await q.evaluate(()=>({mk:Object.keys(PSV.mk),t:document.querySelector('#psList').textContent,info:document.querySelector('#psInfo').textContent}));
-ok('Supabase : marqueur pour le colis avec position récente (track_parcel)',sv.mk.length===1&&sv.mk[0]==='FE-26-20002'&&/Position de \d\d:\d\d/.test(sv.t),JSON.stringify(sv.mk));
-ok('Supabase : position trop ancienne → « indisponible » (aucune position inventée)',/FE-26-20006/.test(sv.t)&&/indisponible ou trop ancienne/.test(sv.t)&&!sv.mk.includes('FE-26-20006'));
+ok('Supabase : tous les colis du partenaire en livraison listés automatiquement, sans lien',/FE-26-20002/.test(sv.t)&&/FE-26-20006/.test(sv.t)&&!/lien de suivi reçu|Ouvrez le lien/i.test(await view(q)));
+ok('Supabase : marqueur pour le colis avec position récente (track_parcel)',sv.mk.length===1&&sv.mk[0]==='FE-26-20002'&&/Dernière position GPS : \d\d:\d\d/.test(sv.t),JSON.stringify(sv.mk));
+ok('Supabase : position trop ancienne → « Position indisponible » (aucune position inventée)',/Position indisponible/.test(await q.$eval('[data-psc="FE-26-20006"]',e=>e.textContent))&&!sv.mk.includes('FE-26-20006'));
+ok('Supabase : liste avec numéro, destinataire, statut et heure GPS',await q.$eval('[data-psc="FE-26-20002"]',e=>/FE-26-20002/.test(e.textContent)&&/En livraison|En cours/i.test(e.textContent)&&e.textContent.includes(CO('FE-26-20002').dest.nom)&&/\d\d:\d\d/.test(e.textContent)));
+await q.click('[data-psc="FE-26-20006"] .small');await q.waitForTimeout(200);
+ok('Supabase : colis sans position sélectionné → message, carte non déplacée vers une position inventée',await q.evaluate(()=>!PSV.mk['FE-26-20006']&&/Position indisponible pour ce colis/.test(document.querySelector('#toasts')?.textContent||document.body.textContent)));
 ok('Supabase : colis d\'un autre partenaire absent de la carte',!/FE-26-20007/.test(sv.t));
 ok('Supabase : aucune lecture de drivers / driver_locations par la carte',await q.evaluate(()=>(window.__MOCKSEL||[]).filter(x=>x.t==='driver_locations'||x.t==='drivers').length)===selBefore);
 const rpcs=await q.evaluate(n=>(window.__MOCKRPC||[]).slice(n),rpcBefore);
-ok('Supabase : la carte n\'appelle que track_parcel',rpcs.length>=2&&rpcs.every(r=>(r.fn||r.name||r[0]||r)==='track_parcel'||JSON.stringify(r).includes('track_parcel')),JSON.stringify(rpcs).slice(0,200));
-ok('Supabase : heure de vérification affichée',/Positions vérifiées à \d\d:\d\d/.test(sv.info),sv.info);
+ok('Supabase : la carte n\'appelle que track_parcel (avec le jeton interne, sans action du partenaire)',rpcs.length>=2&&rpcs.every(r=>(r.fn||r.name||r[0]||r)==='track_parcel'||JSON.stringify(r).includes('track_parcel')),JSON.stringify(rpcs).slice(0,200));
+ok('Supabase : heure d\'actualisation affichée',/actualisé à \d\d:\d\d/.test(sv.info),sv.info);
 // actualisation automatique (publicRefreshMs = 3 s pour le test) : position déplacée
 await q.evaluate(t=>{const d=__MOCKDB.driver_locations.find(x=>x.driver_id==='d-1');d.lat=0.385;d.recorded_at=d.created_at=new Date().toISOString()},null);
 await q.waitForTimeout(4200);
 ok('Supabase : actualisation automatique de la position',await q.evaluate(()=>{const m=PSV.mk['FE-26-20002'];return!!m&&Math.abs(m.getLatLng().lat-0.385)<1e-4}));
+// un colis du partenaire part en livraison pendant que la page est ouverte (temps réel coupé) → apparaît seul
+await q.evaluate(()=>{window.__PG_DOWN=true;Object.assign(__MOCKDB.parcels.find(r=>r.id==='a1'),{status:'in_transit',driver_id:'d-1',tracking_token:'3f2a1b0c-9d8e-4f7a-8b6c-5d4e3f2a1b0c'})});
+await q.waitForTimeout(4500);
+ok('Supabase : nouveau colis en livraison ajouté automatiquement à la liste et à la carte',await q.evaluate(()=>!!document.querySelector('[data-psc="FE-26-20001"]')&&!!PSV.mk['FE-26-20001']&&CO('FE-26-20001').statut==='en_cours'));
+// statuts à jour sur le tableau de bord (relecture toutes les 2 min ; 3 s pour le test)
+await q.evaluate(()=>location.hash='partenaire');await q.waitForTimeout(300);
+const livr0=await q.$eval('#pkLivres .v',e=>+e.textContent.trim());
+await q.evaluate(()=>Object.assign(__MOCKDB.parcels.find(r=>r.id==='a6'),{status:'delivered',delivered_at:new Date().toISOString()}));
+await q.waitForTimeout(4500);
+ok('Supabase : tableau de bord mis à jour automatiquement (statut livré relu)',await q.$eval('#pkLivres .v',e=>+e.textContent.trim())===livr0+1&&await q.evaluate(()=>CO('FE-26-20006').statut==='livre'));
+await q.evaluate(()=>location.hash='colis');await q.waitForTimeout(300);
+ok('Supabase : « Mes colis » affiche les statuts actuels',await q.evaluate(()=>{const r=[...document.querySelectorAll('#view tr[data-c]')];const g=c=>r.find(x=>x.dataset.c===c);return!!g('FE-26-20006')&&/Livré/.test(g('FE-26-20006').textContent)&&/livraison|En cours/i.test(g('FE-26-20001').textContent)}));
+await q.evaluate(()=>{window.__PG_DOWN=false});
 // création
 await q.evaluate(()=>location.hash='partenaire');await q.waitForTimeout(200);
 await q.click('#pNew');await q.waitForTimeout(200);

@@ -495,14 +495,14 @@ function renderDrawer(){
   <div class="box"><h3>Expédition</h3><dl class="kv"><dt>Expéditeur</dt><dd>${esc(c.exp.nom)}</dd><dt>Téléphone</dt><dd class="num">${esc(c.exp.tel)}</dd>${HAS.weight&&c.poids?`<dt>Poids</dt><dd class="num">${String(c.poids).replace('.',',')} kg</dd>`:''}${HAS.fee?`<dt>Frais</dt><dd class="num">${fcfa(c.frais)}</dd>`:`<dt>Frais estimés</dt><dd class="num">${fcfa(c.frais)}</dd>`}<dt>Distance agence</dt><dd class="num">${km(dist(c,HQ)).toFixed(1).replace('.',',')} km</dd><dt>Enregistré</dt><dd>${dayLabel(c.createdAt)} à ${hm(c.createdAt)}</dd></dl></div>
   ${c.preuve?`<div class="box"><h3>Preuve de livraison</h3>${c.preuve.img?`<div class="proof"><img src="${c.preuve.img}" alt="Photo de preuve de livraison de ${c.code}"><small>Photo prise par ${esc(c.preuve.by)} le ${dayLabel(c.preuve.t).toLowerCase()} à ${hm(c.preuve.t)}</small></div>`:`<p class="small muted" style="margin:0">Photo prise par ${esc(c.preuve.by)} à ${hm(c.preuve.t)}, retirée du stockage local pour libérer de la place.</p>`}</div>`:''}
   <div class="box"><h3>Historique du colis</h3>${tlHtml(c)}</div>
-  <div class="row wrap"><button class="btn" id="drPub">${ic('eye',16)}Voir le suivi public</button>${mgr?`<button class="btn" id="drWa">${ic('chat',16)}Conversation WhatsApp</button>`:''}<button class="btn" id="drLink">Copier le lien de suivi</button>${mgr||isPartner()?`<button class="btn" id="drWaShare">${ic('chat',16)}Partager sur WhatsApp</button>`:''}</div>
-  ${isPartner()?'<p class="small muted" style="margin:0">Le partage WhatsApp ouvre un message prérempli que vous envoyez vous-même (pas d\'envoi automatique).</p>':''}
+  <div class="row wrap"><button class="btn" id="drPub">${ic('eye',16)}${isPartner()?'Aperçu de la page client':'Voir le suivi public'}</button>${mgr?`<button class="btn" id="drWa">${ic('chat',16)}Conversation WhatsApp</button>`:''}<button class="btn" id="drLink">${isPartner()?'Copier le lien pour le client':'Copier le lien de suivi'}</button>${mgr||isPartner()?`<button class="btn" id="drWaShare">${ic('chat',16)}Partager sur WhatsApp</button>`:''}</div>
+  ${isPartner()?'<p class="small muted" style="margin:0">Le lien de suivi sert uniquement à informer votre client. Pour suivre vos colis, utilisez « Mes colis » et « Suivi en direct ». Le partage WhatsApp ouvre un message prérempli que vous envoyez vous-même (pas d\'envoi automatique).</p>':''}
  </div>`;
  const dws=$('#drWaShare');if(dws)dws.onclick=()=>{if(!trackUrl(c)){toast('Ce colis n\'a pas de jeton de suivi : aucun lien à partager','warn');return}window.open(waUrl(c,true),'_blank','noopener')};
  const dd=$('#drDrv');if(dd&&MODE==='supabase'&&c.token&&window.FEDB){const code=c.code;window.FEDB.track(c.token).then(d=>{const el=document.getElementById('drDrv');if(!el||openCode!==code)return;
   el.textContent=d&&d.driver_first_name?`Livreur : ${d.driver_first_name}${d.vehicle_type?' · '+d.vehicle_type:''}`:'Livreur attribué'}).catch(()=>{const el=document.getElementById('drDrv');if(el)el.textContent='Livreur attribué'})}
  $('#drX').onclick=closeAll;
- $('#drPub').onclick=()=>{if(MODE==='supabase'){const u=trackUrl(c);if(!u){toast('Ce colis n\'a pas de jeton de suivi : aucune page publique','warn');return}window.open(u,'_blank','noopener');return}closeAll();pubCode=c.code;go('suivi')};
+ $('#drPub').onclick=()=>{if(MODE==='supabase'||isPartner()){const u=trackUrl(c);if(!u){toast('Ce colis n\'a pas de jeton de suivi : aucune page publique','warn');return}window.open(u,'_blank','noopener');return}closeAll();pubCode=c.code;go('suivi')};
  const dw=$('#drWa');if(dw)dw.onclick=()=>{closeAll();waSel=c.dest.tel;go('whatsapp')};
  $('#drLink').onclick=()=>{const u=trackUrl(c);if(!u){toast('Ce colis n\'a pas de jeton de suivi : aucun lien','warn');return}navigator.clipboard?.writeText(u).then(()=>toast('Lien de suivi copié'),()=>toast(esc(u),'warn'))};
  const asb=$('#drAssign');if(asb)asb.onclick=()=>{const r=manualAssign(c,LV($('#drL').value));if(!r.ok){toast(esc(r.msg),'warn');return}toast(esc(r.msg));waToast(c,'attribue');refresh()};
@@ -672,12 +672,11 @@ const VIEWS=[
 const PVIEWS=[{g:'Mon espace'},
  {id:'partenaire',l:'Tableau de bord',i:'grid',sub:()=>PA(AUTH?.partnerId)?.company_name||'Espace partenaire'},
  {id:'colis',l:'Mes colis',i:'box',sub:()=>'Vos envois confiés à FAST EXPRESS'},
- {id:'psuivi',l:'Suivi en direct',i:'map',sub:()=>'Position récente des livreurs de vos colis en route'},
+ {id:'psuivi',l:'Suivi en direct',i:'map',sub:()=>'Vos colis en cours de livraison et la position de leur livreur'},
  {id:'phisto',l:'Historique',i:'clock',sub:()=>'Vos colis livrés, annulés et reportés'},
  {g:'Gestion'},
  {id:'preleves',l:'Mes relevés',i:'gauge',sub:()=>'Bilan de vos envois par période'},
- {id:'pentreprise',l:'Mon entreprise',i:'users',sub:()=>'Coordonnées de votre entreprise'},
- {id:'suivi',l:'Suivi client',i:'eye',sub:()=>'La page que consultent vos clients'}];
+ {id:'pentreprise',l:'Mon entreprise',i:'users',sub:()=>'Coordonnées de votre entreprise'}];
 const viewsFor=()=>isPartner()?PVIEWS:VIEWS.filter(v=>!(v.demo&&MODE!=='demo'));
 let cur='tableau';
 function renderNav(){$('#nav').innerHTML=viewsFor().map(v=>v.g?`<div class="nav-h">${v.g}</div>`:`<a href="#${v.id}" class="${v.id===cur?'on':''}" data-v="${v.id}">${ic(v.i,18)}<span>${v.l}</span>${v.cnt&&v.cnt()?`<span class="cnt">${v.cnt()}</span>`:''}</a>`).join('')}
@@ -687,7 +686,7 @@ function route(){let h=location.hash.slice(1);if(h==='mobile')h='livreur';
  if(pubQ)cur='suivi';                     // lien individuel : fiche publique, connecté ou non
  else if(!AUTH){cur=(h==='suivi'||pubQ)?'suivi':'login';if(cur==='login'&&h&&h!=='login')pendingHash=h}
  else if(isDriver())cur='livreur';
- else{const vs=viewsFor().filter(v=>v.id);cur=vs.find(v=>v.id===h)?h:vs[0].id}closeAll();$('#rail').classList.remove('on');$('#scrim').classList.remove('on');render();window.scrollTo(0,0)}
+ else{if(isPartner()&&h==='suivi')h='psuivi';const vs=viewsFor().filter(v=>v.id);cur=vs.find(v=>v.id===h)?h:vs[0].id}closeAll();$('#rail').classList.remove('on');$('#scrim').classList.remove('on');render();window.scrollTo(0,0)}
 function render(){
  const login=cur==='login',d=cur==='livreur';
  document.body.classList.toggle('drv-mode',d);document.body.classList.toggle('solo',(!AUTH||!!pubToken())&&cur==='suivi');
@@ -1564,7 +1563,7 @@ function pubReset(token){pubMapDestroy();Object.assign(PUB,{token,data:null,fetc
 function suiviPublic(token){
  const v=$('#view');
  if(!token){pubReset(null);
-  v.innerHTML=pubShell('Où est mon colis ?','',pubCard('box',AUTH&&isMgr()?'<b style="color:var(--fg)">Chaque colis a sa propre page de suivi.</b><br>Ouvrez un colis, puis « Voir le suivi public » ou « Copier le lien de suivi » pour l\'envoyer au client.':'Ouvrez le lien de suivi reçu par WhatsApp ou SMS : il affiche directement la page de votre colis.'));return}
+  v.innerHTML=pubShell('Où est mon colis ?','',pubCard('box',AUTH&&isPartner()?'<b style="color:var(--fg)">Cette page est réservée à vos clients.</b><br>Pour suivre vos colis, ouvrez « Suivi en direct » ou « Mes colis » dans votre espace.':AUTH&&isMgr()?'<b style="color:var(--fg)">Chaque colis a sa propre page de suivi.</b><br>Ouvrez un colis, puis « Voir le suivi public » ou « Copier le lien de suivi » pour l\'envoyer au client.':'Ouvrez le lien de suivi reçu par WhatsApp ou SMS : il affiche directement la page de votre colis.'));return}
  if(!CFG.trackingRpc){pubReset(null);v.innerHTML=pubShell('Où est mon colis ?','',pubCard('clock','<b style="color:var(--fg)">Le suivi public sera activé prochainement.</b>'));return}
  if(PUB.token!==token)pubReset(token);
  pubPaint();
@@ -1744,10 +1743,12 @@ function pCreatedModal(c){
    ['pcCopy','pcWa','pcWaAny','pcOpen'].forEach(id=>{const b=document.getElementById(id);if(b)b.disabled=true})}});
 }
 
-/* ---------- Suivi en direct : position récente du livreur pour les colis en cours ----------
-   Supabase : uniquement par la fonction sécurisée track_parcel (une position récente par colis,
-   jamais l'historique, aucun accès à driver_locations). Démo : positions de démonstration.
-   Aucune position inventée ; au-delà de 10 minutes, la position n'est plus affichée. */
+/* ---------- Suivi en direct : TOUS les colis du partenaire en cours de livraison, sans aucun lien ----------
+   La liste vient des colis du partenaire connecté (relus dans Supabase à chaque actualisation, RLS).
+   La position vient de la fonction sécurisée track_parcel, appelée par l'application avec le jeton
+   interne de chaque colis : le partenaire n'a rien à saisir ni à ouvrir. Une position récente par colis,
+   jamais l'historique, aucun accès à driver_locations. Démo : positions de démonstration.
+   Aucune position inventée ; au-delà de 10 minutes, « Position indisponible ». */
 const PSV={res:{},at:0,loading:false,map:null,mk:{},sel:null};
 function psPos(c){
  const now=Date.now();
@@ -1761,8 +1762,10 @@ function psPos(c){
  return{drv:d.driver_first_name||null,veh:d.vehicle_type||null,pos}}
 async function psFetch(force){
  if(MODE!=='supabase'||PSV.loading)return;if(!force&&Date.now()-PSV.at<PUB_MS-250)return;
- const route=myParcels().filter(c=>c.statut==='en_cours'&&c.token).slice(0,30);
  PSV.loading=true;PSV.at=Date.now();psPaint();
+ // 1) statuts à jour : un colis passé « en livraison » depuis le chargement apparaît sans recharger la page
+ try{if(await window.FEDB.pollParcels())pRemoteSync()}catch(e){console.warn('[FAST EXPRESS] relecture des colis',e)}
+ const route=myParcels().filter(c=>c.statut==='en_cours'&&c.token).slice(0,30);
  for(let i=0;i<route.length;i+=4){
   await Promise.all(route.slice(i,i+4).map(c=>window.FEDB.track(c.token)
    .then(d=>{PSV.res[c.code]={d,fetchedAt:Date.now()}})
@@ -1791,32 +1794,42 @@ function psPaint(){
  const list=document.getElementById('psList');if(!list)return;
  const mine=myParcels();const route=mine.filter(c=>c.statut==='en_cours');const wait=mine.filter(c=>['attribue','recupere'].includes(c.statut));
  const info=document.getElementById('psInfo');
- if(info)info.textContent=PSV.loading?'Actualisation en cours…':MODE==='supabase'?(PSV.at?`Positions vérifiées à ${hm(PSV.at)} · actualisation automatique toutes les ${Math.round(PUB_MS/60000)||1} min`:''):'Données de démonstration';
+ if(info)info.textContent=`${route.length} colis en cours de livraison · `+(PSV.loading?'actualisation en cours…':MODE==='supabase'?(PSV.at?`actualisé à ${hm(PSV.at)}, automatiquement toutes les ${Math.round(PUB_MS/60000)||1} min`:''):'données de démonstration');
  const rows=route.map(c=>({c,...psPos(c)}));
- list.innerHTML=rows.length?rows.map(({c,drv,veh,pos,err})=>`<div class="ps-item ${PSV.sel===c.code?'on':''}" data-psc="${c.code}">
+ list.innerHTML=rows.length?rows.map(({c,drv,veh,pos,err})=>`<div class="ps-item ${PSV.sel===c.code?'on':''}" data-psc="${c.code}" tabindex="0" role="button" aria-label="Centrer la carte sur le livreur du colis ${c.code}">
    <div class="row between" style="gap:8px"><b class="mono">${c.code}</b>${badge(c.statut)}</div>
    <div class="small">${esc(c.dest.nom)} · ${esc(zoneLabel(c))}</div>
    <div class="small muted">${drv?`Livreur : ${esc(drv)}${veh?' · '+esc(veh):''}`:'Livreur : information indisponible'}</div>
-   <div class="small ${pos?'t-ok':'t-warn'}">${pos?`${ic('pin',13)} Position de ${hm(pos.rec)} (${pubAge(pos.age)})`:`${ic('clock',13)} Position indisponible ou trop ancienne${err?' (vérification impossible pour le moment)':''}`}</div>
-   <div class="row wrap" style="gap:6px"><button class="btn sm" data-psfocus="${c.code}" ${pos?'':'disabled'}>Centrer</button><button class="btn sm" data-psopen="${c.code}">Fiche</button><button class="btn sm" data-pspub="${c.code}">${ic('eye',13)}Suivi public</button></div>
+   <div class="small ${pos?'t-ok':'t-warn'} ps-gps">${pos?`${ic('pin',13)} Dernière position GPS : ${hm(pos.rec)} (${pubAge(pos.age)})`:`${ic('clock',13)} Position indisponible${err?' · vérification impossible pour le moment':''}`}</div>
+   <div class="row wrap" style="gap:6px"><button class="btn sm" data-psfocus="${c.code}" ${pos?'':'disabled'}>Centrer</button><button class="btn sm" data-psopen="${c.code}">Fiche</button><button class="btn sm" data-psshare="${c.code}" title="Envoyer le lien de suivi au client sur WhatsApp">${ic('chat',13)}Partager au client</button></div>
   </div>`).join('')
-  :`<div class="empty" style="padding:22px 8px">${ic('truck',24)}Aucun de vos colis n'est en cours de livraison.<br>La position du livreur s'affichera ici dès qu'un colis sera en route.</div>`;
+  :`<div class="empty" style="padding:22px 8px">${ic('truck',24)}Aucun de vos colis n'est en cours de livraison.<br>Ils s'afficheront ici automatiquement dès qu'un livreur sera en route.</div>`;
  const wc=document.getElementById('psWaitCard');
- if(wc)wc.innerHTML=`<div class="card-h"><div><h2>Bientôt en route</h2><p>Colis attribués ou récupérés : la position apparaîtra au départ du livreur</p></div></div>${wait.length?`<div class="tbl-wrap"><table><thead><tr><th>N° de suivi</th><th>Destinataire</th><th>Quartier</th><th>Statut</th></tr></thead><tbody>${wait.map(c=>`<tr data-c="${c.code}"><td class="mono" style="font-weight:600">${c.code}</td><td>${esc(c.dest.nom)}</td><td>${esc(zoneLabel(c))}</td><td>${badge(c.statut)}</td></tr>`).join('')}</tbody></table></div>`:`<div class="empty" style="padding:18px">Aucun colis en préparation.</div>`}`;
+ if(wc)wc.innerHTML=`<div class="card-h"><div><h2>Bientôt en route</h2><p>Colis attribués ou récupérés : ils passeront sur la carte au départ du livreur</p></div></div>${wait.length?`<div class="tbl-wrap"><table><thead><tr><th>N° de suivi</th><th>Destinataire</th><th>Quartier</th><th>Statut</th></tr></thead><tbody>${wait.map(c=>`<tr data-c="${c.code}"><td class="mono" style="font-weight:600">${c.code}</td><td>${esc(c.dest.nom)}</td><td>${esc(zoneLabel(c))}</td><td>${badge(c.statut)}</td></tr>`).join('')}</tbody></table></div>`:`<div class="empty" style="padding:18px">Aucun colis en préparation.</div>`}`;
  // Carte : un marqueur par colis dont la position est récente ; les autres sont retirés
  if(PSV.map){const seen={};const pts=[];
   rows.forEach(({c,drv,pos})=>{if(!pos)return;seen[c.code]=1;const ll=[pos.lat,pos.lng];pts.push(ll);
    const ini=esc(String(drv||'L').trim().charAt(0).toUpperCase()||'L');
-   if(!PSV.mk[c.code])PSV.mk[c.code]=L.marker(ll,{icon:L.divIcon({className:'lmk pos-fresh pub-mk',html:`<span style="background:#0c6c49">${ini}</span>`,iconSize:[30,30]}),title:c.code}).bindTooltip(`${c.code} · ${hm(pos.rec)}`).on('click',()=>{PSV.sel=c.code;psPaint()}).addTo(PSV.map);
-   else{PSV.mk[c.code].setLatLng(ll);PSV.mk[c.code].setTooltipContent(`${c.code} · ${hm(pos.rec)}`)}});
+   if(!PSV.mk[c.code])PSV.mk[c.code]=L.marker(ll,{icon:L.divIcon({className:'lmk pos-fresh pub-mk',html:`<span style="background:#0c6c49">${ini}</span>`,iconSize:[30,30]}),title:c.code}).bindTooltip(`${c.code} · ${esc(c.dest.nom)} · ${hm(pos.rec)}`).on('click',()=>{PSV.sel=c.code;psPaint()}).addTo(PSV.map);
+   else{PSV.mk[c.code].setLatLng(ll);PSV.mk[c.code].setTooltipContent(`${c.code} · ${esc(c.dest.nom)} · ${hm(pos.rec)}`)}});
   Object.keys(PSV.mk).forEach(k=>{if(!seen[k]){PSV.mk[k].remove();delete PSV.mk[k]}});
   if(pts.length&&!PSV.fitted){PSV.map.fitBounds(pts,{padding:[40,40],maxZoom:15});PSV.fitted=true}
  }
- list.querySelectorAll('[data-psfocus]').forEach(b=>b.onclick=()=>{const m=PSV.mk[b.dataset.psfocus];PSV.sel=b.dataset.psfocus;if(m&&PSV.map)PSV.map.setView(m.getLatLng(),16);psPaint()});
+ // Sélection d'un colis (clic sur sa carte ou « Centrer ») : la carte se centre sur son livreur
+ const pick=code=>{PSV.sel=code;const m=PSV.mk[code];if(m&&PSV.map){PSV.map.setView(m.getLatLng(),16);m.openTooltip()}else toast('Position indisponible pour ce colis : aucune position récente du livreur','warn');psPaint()};
+ list.querySelectorAll('[data-psc]').forEach(el=>{el.onclick=e=>{if(e.target.closest('button'))return;pick(el.dataset.psc)};el.onkeydown=e=>{if((e.key==='Enter'||e.key===' ')&&e.target===el){e.preventDefault();pick(el.dataset.psc)}}});
+ list.querySelectorAll('[data-psfocus]').forEach(b=>b.onclick=()=>pick(b.dataset.psfocus));
  list.querySelectorAll('[data-psopen]').forEach(b=>b.onclick=()=>openColis(b.dataset.psopen));
- list.querySelectorAll('[data-pspub]').forEach(b=>b.onclick=()=>{const c=CO(b.dataset.pspub);if(!c)return;if(MODE==='supabase'){const u=trackUrl(c);if(u)window.open(u,'_blank','noopener');else toast('Lien de suivi indisponible','warn')}else{pubCode=c.code;go('suivi')}});
+ list.querySelectorAll('[data-psshare]').forEach(b=>b.onclick=()=>{const c=CO(b.dataset.psshare);if(!c)return;if(!trackUrl(c)){toast('Ce colis n\'a pas de lien de suivi à partager','warn');return}window.open(waUrl(c,true),'_blank','noopener')});
  document.querySelectorAll('#psWaitCard [data-c]').forEach(r=>r.onclick=()=>openColis(r.dataset.c));
 }
+/* Après relecture des colis : la page affichée se met à jour (sauf pendant une saisie) */
+function pRemoteSync(){const ae=document.activeElement;if(modal.classList.contains('on')||(ae&&/INPUT|TEXTAREA|SELECT/.test(ae.tagName))){renderNav();return}
+ if(cur==='psuivi'){psPaint();renderNav()}else render();if(openCode&&drawer.classList.contains('on'))renderDrawer()}
+/* Supabase, partenaire : statuts de ses colis relus toutes les 2 minutes sur toutes ses pages
+   (tableau de bord, Mes colis…), au cas où le temps réel n'arriverait pas. Lecture seule. */
+setInterval(()=>{if(MODE!=='supabase'||!AUTH||!isPartner()||cur==='psuivi'||!window.FEDB||document.visibilityState!=='visible'||!navigator.onLine)return;
+ window.FEDB.pollParcels().then(ch=>{if(ch)pRemoteSync()}).catch(e=>console.warn('[Supabase] relecture des colis',e))},PUB_MS);
 /* Actualisation : position relue toutes les 2 minutes (page visible), âge recalculé toutes les 15 s */
 setInterval(()=>{if(cur!=='psuivi'||!AUTH||!isPartner()||document.visibilityState!=='visible')return;
  if(MODE==='supabase')psFetch(false);psPaint()},Math.max(500,Math.min(15000,Math.round(PUB_MS/4))));

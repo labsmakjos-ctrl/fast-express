@@ -576,10 +576,12 @@ td .sub{display:block;color:var(--muted);font-size:12px}
 /* ---------- Espace partenaire ---------- */
 .pqa{display:flex;flex-wrap:wrap;gap:8px}
 .kpis.pkpis{grid-template-columns:repeat(4,minmax(0,1fr))}
-.ps-item{border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:5px;cursor:default}
+.ps-item{border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:5px;cursor:pointer}
+.ps-item:hover{border-color:var(--line-2)}.ps-item:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 .ps-item.on{border-color:var(--brand);box-shadow:0 0 0 2px var(--brand-soft, rgba(12,108,73,.15))}
 #pmap{min-height:420px}
 @media (max-width:900px){.kpis.pkpis{grid-template-columns:repeat(2,minmax(0,1fr))}#pmap{min-height:320px}}
 @media (max-width:640px){.pqa .btn{flex:1 1 calc(50% - 8px);justify-content:center}}
 .kpis.pkpis .kpi{min-width:0}.kpis.pkpis .kpi .v{overflow-wrap:anywhere}
 @media (max-width:640px){.kpis.pkpis .kpi .v{font-size:22px}}
+.ps-gps{display:flex;gap:6px;align-items:center}
