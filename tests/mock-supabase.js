@@ -25,6 +25,7 @@ const DB=window.__MOCKDB=JSON.parse(localStorage.getItem('__mockdb')||'null')||{
  parcel_events:[{id:1,parcel_id:'a2',author_id:'u-mgr',author_role:'manager',status:'pending',reason:'Attribué manuellement à Rodrigue Ondo',lat:null,lng:null,created_at:iso(now-36e5)},{id:2,parcel_id:'a3',author_id:'u-d1',author_role:'driver',status:'postponed',reason:'Échec : Destinataire injoignable',lat:0.41,lng:9.48,created_at:iso(now-18e5)}],
 };
 const USERS={'manager@test.ga':'u-mgr','rodrigue@test.ga':'u-d1','prisca@test.ga':'u-d2','gts@test.ga':'u-p1','off@test.ga':'u-off','bloque@test.ga':'u-p2'};
+window.__MOCKUSERS=USERS;
 const persist=()=>localStorage.setItem('__mockdb',JSON.stringify(DB));
 const err=m=>({data:null,error:{message:m}});
 function badCols(t,cols){return cols.filter(c=>!ALLOWED[t].includes(c))}
@@ -34,7 +35,7 @@ PGBC.onmessage=({data:m})=>{const tb=DB[m.t];if(!tb)return;const i=tb.findIndex(
  if(window.__PG_DOWN)return;listeners.forEach(l=>l(m.t,m.e,m.row))};
 class Q{
  constructor(t){this.t=t;this.op='select';this.f=[];this.ord=null;this.lim=null;this.one=null;this.cols=null}
- select(c){if(this.op==='select'||this.op==='insert'){this.cols=c}if(this.op==='select')this.cols=c;return this}
+ select(c){this.cols=c;return this}
  insert(r){this.op='insert';this.rows=Array.isArray(r)?r:[r];return this}
  update(p){this.op='update';this.patch=p;return this}
  eq(c,v){this.f.push([c,'eq',v]);return this}
@@ -53,19 +54,27 @@ class Q{
   if(this.op==='select'&&uid==='u-p2'&&t==='parcels')return{data:null,error:{code:'42501',message:'permission denied for table parcels'}};
   const used=[...this.f.map(x=>x[0]),...(this.ord?[this.ord[0]]:[])];
   const selCols=(this.cols||'*')==='*'?ALLOWED[t]:this.cols.split(',').map(s=>s.trim()).filter(Boolean);
+  if(window.__COL_PROTECT&&t==='parcels'){const w=this.op==='select'?[...used,...selCols]:this.op==='insert'?this.rows.flatMap(r=>Object.keys(r)):this.op==='update'?Object.keys(this.patch):[];
+   if(w.includes('confirmation_code')){LOG.push({t,op:this.op,error:'colonne protégée'});return{data:null,error:{code:'42501',message:'permission denied for table parcels'}}}}
   const bad=badCols(t,[...used,...selCols]);if(bad.length){LOG.push({t,op:this.op,error:'colonne inconnue '+bad});return err('column '+t+'.'+bad[0]+' does not exist')}
   const match=r=>this.f.every(([c,o,v])=>o==='eq'?r[c]===v:o==='gt'?r[c]>v:v.includes(r[c]));
-  if(this.op==='select'){(window.__MOCKSEL=window.__MOCKSEL||[]).push({t,uid:uid||null});let rows=DB[t].filter(match);if(this.ord){const [c,a]=this.ord;rows=rows.slice().sort((x,y)=>(x[c]>y[c]?1:x[c]<y[c]?-1:0)*(a?1:-1))}if(this.lim)rows=rows.slice(0,this.lim);rows=rows.map(r=>Object.fromEntries(selCols.map(c=>[c,r[c]??null])));
+  if(this.op==='select'){(window.__MOCKSEL=window.__MOCKSEL||[]).push({t,uid:uid||null});(window.__MOCKCOLS=window.__MOCKCOLS||[]).push({t,cols:String(this.cols||'*')});let rows=DB[t].filter(match);if(this.ord){const [c,a]=this.ord;rows=rows.slice().sort((x,y)=>(x[c]>y[c]?1:x[c]<y[c]?-1:0)*(a?1:-1))}if(this.lim)rows=rows.slice(0,this.lim);rows=rows.map(r=>Object.fromEntries(selCols.map(c=>[c,r[c]??null])));
    if(this.one)return{data:rows[0]||null,error:this.one==='single'&&!rows[0]?{message:'no rows'}:null};return{data:rows,error:null}}
+  if(this.op==='insert'&&window.__FAIL_INSERT&&t==='parcels'){LOG.push({t,op:'insert',error:'panne simulée'});return err('simulated failure')}
   if(this.op==='insert'){window.__REQ=(window.__REQ||[]);window.__REQ.push({t,n:this.rows.length});const out=[];for(const r of this.rows){const b=badCols(t,Object.keys(r));if(b.length){LOG.push({t,op:'insert',error:'colonne inconnue '+b});return err('column "'+b[0]+'" of relation "'+t+'" does not exist')}
     if((t==='parcels'||t==='parcel_events')&&r.status&&!STATUSES.includes(r.status)){LOG.push({t,op:'insert',error:'statut '+r.status});return err('violates check constraint status')}
     if(t==='parcels'&&DB.parcels.some(x=>x.tracking_number===r.tracking_number)){LOG.push({t,op:'insert',dup:r.tracking_number});return{data:null,error:{code:'23505',message:'duplicate key value violates unique constraint "parcels_tracking_number_key"',details:'Key (tracking_number)=('+r.tracking_number+') already exists.'}}}
-    const row=Object.assign({},r);if(!row.id)row.id=t==='parcels'?'n'+Math.random().toString(36).slice(2,9):DB[t].length+1;if(ALLOWED[t].includes('created_at')&&!row.created_at)row.created_at=new Date().toISOString();DB[t].push(row);out.push(row);LOG.push({t,op:'insert',row});
+    const row=Object.assign({},r);if(t==='parcels'&&window.__HAS_CODE_RPC&&(row.confirmation_code==null||String(row.confirmation_code).trim()===''))row.confirmation_code=String(1000+crypto.getRandomValues(new Uint32Array(1))[0]%9000);if(!row.id)row.id=t==='parcels'?'n'+Math.random().toString(36).slice(2,9):DB[t].length+1;if(ALLOWED[t].includes('created_at')&&!row.created_at)row.created_at=new Date().toISOString();DB[t].push(row);out.push(row);LOG.push({t,op:'insert',row,sent:Object.keys(r)});
     listeners.forEach(l=>l(t,'INSERT',row));PGBC.postMessage({t,e:'INSERT',row})}
    persist();const sc=(this.cols||'id').split(',');const d=out.map(r=>Object.fromEntries(sc.map(c=>[c,r[c]])));return{data:this.one?d[0]:d,error:null}}
   if(this.op==='update'){const b=badCols(t,Object.keys(this.patch));if(b.length){LOG.push({t,op:'update',error:'colonne inconnue '+b});return err('column "'+b[0]+'" does not exist')}
    if(t==='parcels'&&this.patch.status&&!STATUSES.includes(this.patch.status)){LOG.push({t,op:'update',error:'statut '+this.patch.status});return err('violates check constraint status')}
-   const rows=DB[t].filter(match);rows.forEach(r=>{Object.assign(r,this.patch);listeners.forEach(l=>l(t,'UPDATE',r));PGBC.postMessage({t,e:'UPDATE',row:r})});LOG.push({t,op:'update',patch:this.patch,n:rows.length});persist();return{data:null,error:null}}
+   let rows=DB[t].filter(match);
+   // RLS simulée sur partners : manager = tout ; partenaire = sa fiche seulement SI la politique 07 est « installée » (__PARTNER_UPD_POLICY) ; sinon 0 ligne, sans erreur (comme PostgREST)
+   if(t==='partners'&&!(prof&&prof.role==='manager'))rows=window.__PARTNER_UPD_POLICY&&prof&&prof.role==='partner'?rows.filter(r=>r.profile_id===uid):[];
+   if(t==='partners'&&window.__PARTNER_UPD_POLICY&&prof&&prof.role==='partner'&&('company_name' in this.patch||'profile_id' in this.patch||'id' in this.patch)){LOG.push({t,op:'update',error:'garde-fou 07'});return err('Seul FAST EXPRESS peut modifier le nom, le compte ou l\'identifiant de l\'entreprise')}
+   rows.forEach(r=>{Object.assign(r,this.patch);listeners.forEach(l=>l(t,'UPDATE',r));PGBC.postMessage({t,e:'UPDATE',row:r})});LOG.push({t,op:'update',patch:this.patch,n:rows.length});persist();
+   if(this.cols){const sc=this.cols.split(',').map(x=>x.trim());return{data:rows.map(r=>Object.fromEntries(sc.map(c=>[c,r[c]??null]))),error:null}}return{data:null,error:null}}
  }
 }
 /* Même logique que public.track_parcel (SQL validé) : jeton UUID, un seul colis, champs publics seulement,
@@ -85,6 +94,23 @@ function trackParcel(tok){
   return{status:{pending:/^(Attribué|Réaffecté|Confié)/.test(r)?'attribue':'en_attente',picked_up:'recupere',in_transit:'en_cours',delivered:'livre',postponed:/^Échec/.test(r)?'echec':'reporte',cancelled:'annule'}[e.status]||'inconnu',at:e.created_at}});
  return{tracking_number:p.tracking_number,status:st,created_at:p.created_at||null,delivered_at:p.delivered_at||null,postponed_date:p.postponed_date?String(p.postponed_date).slice(0,10):null,
   partner_name:pa?pa.company_name:null,driver_first_name:drv,vehicle_type:veh,driver_position:pos,events:ev,server_time:new Date().toISOString()}}
+/* Même logique que la proposition supabase/05a_verification_code_serveur.sql */
+const ATTEMPTS=window.__ATTEMPTS=[];
+function confirmDelivery(a){
+ const uid=session&&session.user.id;const no=e=>({ok:false,error:e});if(!uid)return no('not_allowed');
+ const pr=DB.profiles.find(x=>x.id===uid);if(!pr||pr.is_active===false||pr.role==null||!['manager','driver'].includes(pr.role))return no('not_allowed');
+ const p=DB.parcels.find(x=>x.id===a.p_parcel_id);if(!p)return no('not_found');
+ if(pr.role==='driver'&&!DB.drivers.some(d=>d.profile_id===uid&&d.id===p.driver_id))return no('not_allowed');
+ if(p.status==null||p.status!=='in_transit')return no('bad_status');
+ if(typeof a.p_code!=='string'||!/^[0-9]{4}$/.test(a.p_code))return no('bad_code');
+ const lastReset=Math.max(0,...ATTEMPTS.filter(x=>x.parcel_id===p.id&&x.kind==='reset').map(x=>x.t));
+ const fails=ATTEMPTS.filter(x=>x.parcel_id===p.id&&x.kind==='fail'&&Date.now()-x.t<9e5&&x.t>lastReset).length;if(fails>=5)return no('locked');
+ if(p.confirmation_code==null||String(p.confirmation_code).trim()!==a.p_code){ATTEMPTS.push({parcel_id:p.id,kind:'fail',t:Date.now()});return{ok:false,error:'code_incorrect',remaining:Math.max(5-fails-1,0)}}
+ ATTEMPTS.push({parcel_id:p.id,kind:'success',t:Date.now()});
+ Object.assign(p,{status:'delivered',delivered_at:new Date().toISOString(),updated_at:new Date().toISOString()});LOG.push({t:'parcels',op:'rpc_update',row:p});
+ const ev={id:DB.parcel_events.length+1,parcel_id:p.id,status:'delivered',reason:'Remis au destinataire · code vérifié par le serveur',author_id:uid,author_role:pr.role,lat:a.p_lat??null,lng:a.p_lng??null,created_at:new Date().toISOString()};
+ DB.parcel_events.push(ev);LOG.push({t:'parcel_events',op:'rpc_insert',row:ev});persist();
+ listeners.forEach(l=>l('parcels','UPDATE',p));PGBC.postMessage({t:'parcels',e:'UPDATE',row:p});return{ok:true}}
 let session=JSON.parse(localStorage.getItem('__mocksession')||'null');const AUTHL=window.__AUTHL=[];
 const client={
  from:t=>new Q(t),
@@ -118,6 +144,10 @@ const client={
  async rpc(name,args){(window.__MOCKRPC=window.__MOCKRPC||[]).push({name,args});
   if(!navigator.onLine)return err('TypeError: Failed to fetch');
   if(window.__RPC_DOWN)return err('Service indisponible');
+  if(name==='get_delivery_code'){if(!window.__HAS_CODE_RPC)return err('Could not find the function public.get_delivery_code');
+   const uid=session&&session.user.id;const pr=uid&&DB.profiles.find(x=>x.id===uid);if(!pr||pr.is_active===false||pr.role!=='manager')return{data:null,error:null};
+   const p=DB.parcels.find(x=>x.id===(args&&args.p_parcel_id));return{data:p&&['pending','picked_up','in_transit','postponed'].includes(p.status)&&p.confirmation_code!=null?String(p.confirmation_code).trim():null,error:null}}
+  if(name==='confirm_delivery'){if(!window.__HAS_CONFIRM_RPC)return err('Could not find the function public.confirm_delivery');return{data:confirmDelivery(args||{}),error:null}}
   if(name!=='track_parcel')return err('function does not exist');
   return{data:trackParcel(args&&args.p_token),error:null}},
 };

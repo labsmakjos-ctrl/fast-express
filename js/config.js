@@ -23,6 +23,9 @@ window.FE_CONFIG = {
   // Laissez null tant qu'elles ne sont pas confirmées ; indiquez le nom
   // exact de la colonne pour activer l'enregistrement correspondant.
   optionalColumns: {
+    // Adresse de l'entreprise partenaire : la table partners n'a PAS de colonne d'adresse aujourd'hui.
+    // Mettre 'address' seulement après ajout de la colonne (supabase/07_proposition_espace_partenaire.sql).
+    partners: { address: null },
     parcels: {
       // Confirmées par le diagnostic du 16/11 sur le projet Supabase :
       createdAt: 'created_at',                 // date de création
@@ -42,6 +45,12 @@ window.FE_CONFIG = {
   proofBucket: null,        // ex. 'delivery-proofs'
 
   // Fonction serveur de suivi public par tracking_token (null = indisponible)
+  deliveryRpc: null,             // future fonction serveur de vérification du code de remise ('confirm_delivery'),
+                                 // à activer SEULEMENT après l'étape 05A dans Supabase (voir supabase/05a_…)
+  deliveryCodeRpc: null,         // future protection de la colonne confirmation_code ('get_delivery_code') :
+                                 // le manager demande le code au serveur, personne ne lit la colonne.
+                                 // Exige deliveryRpc. Voir supabase/06a_… et supabase/06b_…
+  parcelPollMs: 30000,           // avec deliveryCodeRpc : relecture des colis toutes les 30 s (secours du temps réel)
   trackingRpc: 'track_parcel',   // fonction sécurisée de suivi public (lecture seule, par jeton secret)
   trackingBaseUrl: null,         // adresse des liens de suivi ; null = adresse actuelle du site
   publicRefreshMs: 120000,       // page de suivi client : actualisation toutes les 2 minutes

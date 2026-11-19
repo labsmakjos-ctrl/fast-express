@@ -272,6 +272,8 @@ function pushWA(c,key,t=Date.now(),silent=false){
 /* Numéro de suivi. Démo : suite FE-26-xxxxx. Supabase : date + 4 caractères aléatoires (FE-261116-4K7Q),
    car un partenaire ou un livreur ne voit pas tous les colis et ne peut pas connaître le dernier numéro utilisé. */
 const CODE_ALPHA='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+/* Code de remise du client (4 chiffres, 1000 à 9999) : générateur cryptographique, jamais Math.random() */
+function newOtp(){if(!(window.crypto&&crypto.getRandomValues))throw new Error('Générateur aléatoire sécurisé indisponible dans ce navigateur.');const a=new Uint32Array(1);crypto.getRandomValues(a);return String(1000+a[0]%9000)}
 function randCode(n){const a=new Uint32Array(n);if(!(window.crypto&&crypto.getRandomValues))throw new Error('Générateur aléatoire sécurisé indisponible dans ce navigateur.');crypto.getRandomValues(a);return[...a].map(x=>CODE_ALPHA[x%CODE_ALPHA.length]).join('')}
 function nextCode(){let code;
  if(MODE==='supabase'){const d=new Date();const ymd=String(d.getFullYear()).slice(2)+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0');
@@ -282,10 +284,10 @@ window.addEventListener('fe-code-changed',e=>{const {old,code}=e.detail;S.log.fo
 function createColis(d){
  const code=nextCode();
  const P=PA(d.partnerId)||S.partners[0];const pt=d.point;
- const c={id:'C'+code.slice(6),dbId:null,code,token:uuid(),partnerId:P.id,exp:{nom:P.company_name,tel:P.contact_phone},dest:{nom:d.destNom,tel:d.destTel},zone:d.zone||zoneOf(pt),x:pt.x,y:pt.y,precision:d.precision||null,adresse:d.adresse,type:d.type,poids:d.poids,cod:d.cod,frais:fraisCalc(pt,d.type,d.poids),statut:'en_attente',livreurId:null,createdAt:Date.now(),otp:String(1000+Math.floor(Math.random()*9000)),hist:[{t:Date.now(),s:'en_attente',note:P.company_name===COMPTOIR_NAME?`Déposé au comptoir de l'agence de Glass${d.depositor?' par '+d.depositor:''}`:`Enregistré par ${P.company_name}`,by:d.who||me0()}],motif:'',postponedDate:null};
+ const c={id:'C'+code.slice(6),dbId:null,code,token:uuid(),partnerId:P.id,exp:{nom:P.company_name,tel:P.contact_phone},dest:{nom:d.destNom,tel:d.destTel},zone:d.zone||zoneOf(pt),x:pt.x,y:pt.y,precision:d.precision||null,adresse:d.adresse,type:d.type,poids:d.poids,cod:d.cod,frais:fraisCalc(pt,d.type,d.poids),statut:'en_attente',livreurId:null,createdAt:Date.now(),otp:MODE==='supabase'&&CFG.deliveryCodeRpc?'':newOtp(),hist:[{t:Date.now(),s:'en_attente',note:P.company_name===COMPTOIR_NAME?`Déposé au comptoir de l'agence de Glass${d.depositor?' par '+d.depositor:''}`:`Enregistré par ${P.company_name}`,by:d.who||me0()}],motif:'',postponedDate:null};
  S.colis.unshift(c);log('creation',c.code,logText(c,c.hist[0]),d.who);
  const sent=pushWA(c,'creation');
- save();remote('createParcel',c);return{c,sent}}
+ save();Object.defineProperty(c,'_sync',{value:remote('createParcel',c),configurable:true,writable:true});return{c,sent}}
 /* =========================================================
    ATTRIBUTION AUTOMATIQUE INTELLIGENTE
    Règles : 1-2) seuls les livreurs « Disponible » ; 6) jamais au-delà de la capacité ;
@@ -398,7 +400,54 @@ function setStatus(c,s,note,who,opts={}){
  if(s==='en_attente'){c.livreurId=null;c.report=null;c.postponedDate=null;h.note=note||'Reprogrammé, en attente d\'un livreur';log('statut',c.code,`Reprogrammé : ${h.note}`,who)}
  else log(s==='livre'?'livre':s==='echec'?'echec':s==='reporte'||s==='annule'?'probleme':'statut',c.code,logText(c,h,L),who);
  if(S.tpl[s])pushWA(c,s);
- save();remote('status',c,h)}
+ save();if(!opts.remoteDone)remote('status',c,h)}
+
+/* ---------- Confirmation de livraison : TOUJOURS avec le code de remise du client ----------
+   - Mode Supabase avec CFG.deliveryRpc : le SERVEUR vérifie le code et enregistre la livraison
+     (essais limités côté serveur). Le code n'est alors plus chargé chez le livreur ni chez le partenaire ;
+     le manager peut toujours le consulter pour le communiquer au client par téléphone
+     (avec CFG.deliveryCodeRpc, il le demande au serveur au lieu de le lire dans la table).
+   - Sinon (démo, ou transition tant que la fonction serveur n'existe pas) : vérification dans le navigateur,
+     le code étant chargé (jamais affiché) chez le livreur.
+   Ni le livreur ni le manager ne peuvent enregistrer « Livré » sans le bon code. */
+const DELIV_ERR={code_incorrect:'Code de livraison incorrect. Vérifiez avec le client.',locked:'Trop de codes incorrects : la vérification de ce colis est bloquée pendant 15 minutes. Contactez l\'agence.',
+ not_allowed:'Vous n\'êtes pas autorisé à confirmer la livraison de ce colis.',bad_status:'Ce colis n\'est plus en cours de livraison.',not_found:'Colis introuvable.',bad_code:'Saisissez le code à 4 chiffres communiqué par le client.',
+ last_try:'Code de livraison incorrect. C\'était le dernier essai : la vérification de ce colis est bloquée pendant 15 minutes. Contactez l\'agence.',
+ bad_stored:'Le code enregistré pour ce colis n\'est pas au bon format (4 chiffres) : la livraison ne peut pas être confirmée. Contactez l\'agence.',
+ no_server:'Vérification du code impossible : la fonction serveur de confirmation n\'est pas activée. Contactez l\'agence.'};
+/* Code de remise conforme : exactement 4 chiffres, espaces autour ignorés (comme côté serveur) */
+const otpClean=v=>String(v??'').trim();
+const otpOk=v=>/^[0-9]{4}$/.test(otpClean(v));
+async function confirmDelivery(c,code,who,opts={}){
+ code=String(code||'').trim();
+ if(!/^\d{4}$/.test(code))return{ok:false,msg:DELIV_ERR.bad_code};
+ if(!c||c.statut!=='en_cours')return{ok:false,msg:DELIV_ERR.bad_status};
+ if(MODE==='supabase'&&CFG.deliveryRpc){
+  let r;try{r=await window.FEDB.confirmDelivery(c,code,opts)}catch(e){console.error('[Supabase] confirmation',e);return{ok:false,msg:'Vérification impossible pour le moment ('+esc(e.message||'erreur')+'). Réessayez.'}}
+  if(!r||r.ok!==true){
+   if(r&&r.error==='code_incorrect'&&r.remaining===0)return{ok:false,msg:DELIV_ERR.last_try};
+   const base=DELIV_ERR[r&&r.error]||'Code refusé par le serveur.';const left=r&&r.error==='code_incorrect'&&Number.isFinite(r.remaining)&&r.remaining>0?` Il reste ${r.remaining} essai${r.remaining>1?'s':''}.`:'';return{ok:false,msg:base+left}}
+  setStatus(c,'livre',null,who,{...opts,remoteDone:true});return{ok:true}}
+ if(MODE==='supabase'&&CFG.deliveryCodeRpc)return{ok:false,msg:DELIV_ERR.no_server};   // code protégé : seule la vérification serveur est possible
+ if(!otpOk(c.otp))return{ok:false,msg:DELIV_ERR.bad_stored};
+ if(code!==otpClean(c.otp))return{ok:false,msg:DELIV_ERR.code_incorrect};
+ setStatus(c,'livre',null,who,opts);return{ok:true}}
+
+/* Code de remise dans la fiche (manager uniquement) */
+const OTP_NOTE='<span class="small muted" style="display:block;margin-top:4px">À communiquer au client par téléphone. Le livreur ne le voit pas : il le demande au client à la remise.</span>';
+function otpBoxHtml(c){
+ if(MODE==='supabase'&&CFG.deliveryCodeRpc){const k=c._srvCode;
+  if(k===undefined)return'<span class="small muted">Chargement du code…</span>';
+  if(!k||!k.code)return`<span class="small muted">${esc(k&&k.err?k.err:'Code non disponible pour ce colis.')}</span>`;
+  return`<span class="otp">${esc(k.code)}</span>${otpOk(k.code)?'':'<span class="small" style="display:block;color:var(--bad)">Format non conforme : ce colis ne pourra pas être confirmé.</span>'}${OTP_NOTE}`}
+ if(!otpClean(c.otp))return'<span class="small muted">Code non disponible pour ce colis.</span>';
+ return`<span class="otp">${esc(otpClean(c.otp))}</span>${otpOk(c.otp)?'':'<span class="small" style="display:block;color:var(--bad)">Format non conforme (4 chiffres attendus) : ce colis ne pourra pas être confirmé. Contactez l\'administrateur.</span>'}${OTP_NOTE}`}
+/* Colonne protégée : le manager demande le code au serveur (fonction get_delivery_code) */
+async function loadSrvCode(c){
+ if(!(MODE==='supabase'&&CFG.deliveryCodeRpc&&isMgr())||!c||c._srvCode!==undefined)return;
+ try{const code=await window.FEDB.getDeliveryCode(c);c._srvCode={code:code?otpClean(code):''}}
+ catch(e){console.warn('[Supabase] code de remise',e);c._srvCode={err:'Code indisponible pour le moment.'};setTimeout(()=>{if(c._srvCode&&c._srvCode.err)delete c._srvCode},30000)}
+ const box=document.getElementById('drOtpBox');if(box&&openCode===c.code)box.innerHTML=otpBoxHtml(c)}
 
 /* ---------- UI : toasts, modal, drawer ---------- */
 function toast(msg,kind=''){const t=document.createElement('div');t.className='toast '+(kind==='wa'?'twa':kind==='warn'?'twarn':kind);t.innerHTML=(kind==='wa'?ic('chat',16):kind==='warn'?ic('alert',16):ic('check',16))+`<span>${msg}</span>`;const tc=$('#toasts');tc.appendChild(t);while(tc.children.length>(document.body.classList.contains('drv-mode')?2:4))tc.firstElementChild.remove();setTimeout(()=>t.remove(),3600)}
@@ -417,7 +466,7 @@ function stepsHtml(c){
  return`<div class="steps">${order.map((s,i)=>`<div class="step ${i<=idx?(bad&&i===4?'fail':'done'):''}"><i></i>${lab[i]}</div>`).join('')}</div>`}
 function tlHtml(c,pub=false){const hs=c.hist.slice().reverse();return`<div class="tl">${hs.map((h,i)=>`<div class="tl-i ${i===0?(['echec','annule','reporte'].includes(h.s)?'bad':'last'):''}"><b>${ST[h.s].l}</b><p>${esc(pub&&h.s==='attribue'?'Un livreur FAST EXPRESS a été désigné':h.note)}</p><small>${dayLabel(h.t)} · ${hm(h.t)}</small></div>`).join('')}</div>`}
 function renderDrawer(){
- const c=CO(openCode);if(!c)return;const L=LV(c.livreurId);
+ const c=CO(openCode);if(!c)return;if(isMgr())setTimeout(()=>loadSrvCode(c),0);const L=LV(c.livreurId);
  const ev=S.livreurs.map(l=>evaluer(c,l));
  const opts=ev.map(e=>e.l.id===c.livreurId?`<option value="${e.l.id}" selected>${esc(e.l.nom)} (actuel)</option>`:`<option value="${e.l.id}" ${e.ok?'':'disabled'}>${esc(e.l.nom)} · ${e.ok?`${e.load}/${e.cap} actifs${e.d!=null?' · '+fmt1(e.d)+' km':''}`:esc(e.why)}</option>`).join('');
  const rk0=!c.livreurId&&c.statut==='en_attente'?classer(c):null;
@@ -425,7 +474,7 @@ function renderDrawer(){
  const mgr=isMgr();
  if(mgr&&c.statut==='attribue')acts+=`<button class="btn pri" data-a="recupere">${ic('box',16)}Marquer récupéré</button>`;
  if(mgr&&c.statut==='recupere')acts+=`<button class="btn pri" data-a="en_cours">${ic('truck',16)}Marquer en livraison</button>`;
- if(mgr&&c.statut==='en_cours')acts+=`<button class="btn pri" data-a="livre">${ic('check',16)}Confirmer la livraison</button><button class="btn danger" data-a="echec">${ic('alert',16)}Signaler un échec</button>`;
+ if(mgr&&c.statut==='en_cours')acts+=`<button class="btn pri" data-a="livrecode">${ic('check',16)}Confirmer avec le code du client</button><button class="btn danger" data-a="echec">${ic('alert',16)}Signaler un échec</button>`;
  if(mgr&&(c.statut==='echec'||c.statut==='reporte'))acts+=`<button class="btn pri" data-a="reprog">${ic('refresh',16)}Reprogrammer</button>`;
  if((mgr&&['en_attente','attribue','recupere'].includes(c.statut))||(isPartner()&&c.statut==='en_attente'))acts+=`<button class="btn danger" data-a="annule">${ic('x',16)}Annuler le colis</button>`;
  drawer.innerHTML=`
@@ -435,19 +484,23 @@ function renderDrawer(){
   ${['echec','reporte','annule'].includes(c.statut)&&c.motif?`<div class="banner" style="background:var(--bad-soft);color:var(--bad)">${ic('alert',16)}<span>${ST[c.statut].l} · Motif : ${esc(c.motif)}${c.statut==='reporte'&&c.report?` · Nouveau créneau : ${esc(c.report.creneau)}`:''}${c.hist.at(-1).by?` · Signalé par ${esc(c.hist.at(-1).by)}`:''}</span></div>`:''}
   ${c.statut==='en_attente'&&c.alerte?`<div class="banner" style="background:var(--bad-soft);color:var(--bad)">${ic('alert',16)}<span>${esc(c.alerte)}</span></div>`:''}
   ${['en_attente',...ACTIVE].includes(c.statut)&&(mgr||c.livreurId)?`<div class="box"><h3>${c.livreurId?'Livreur':'Attribuer un livreur'}</h3>
-   ${L?`<div class="row" style="margin-bottom:12px">${av(L)}<div style="min-width:0"><b>${esc(L.nom)}</b><div class="small muted">${esc(L.vehicule)} · ${esc(L.tel)}</div></div></div>`:''}
+   ${L?`<div class="row" style="margin-bottom:12px">${av(L)}<div style="min-width:0"><b>${esc(L.nom)}</b><div class="small muted">${esc(L.vehicule)} · ${esc(L.tel)}</div></div></div>`:c.livreurId?`<div class="small muted" id="drDrv" style="margin-bottom:4px">Livreur attribué${MODE==='supabase'?' · vérification du nom…':''}</div>`:''}
    ${mgr&&['en_attente','attribue'].includes(c.statut)?`<div class="row"><select class="select" id="drL" aria-label="Choisir un livreur">${c.livreurId?'':'<option value="">Choisir un livreur…</option>'}${opts}</select><button class="btn ${c.livreurId?'':'pri'}" id="drAssign">${c.livreurId?'Changer':'Attribuer'}</button></div>
    ${rk0?(rk0.ok[0]?`<div class="sugg">${ic('star',14)}<span class="why">Suggestion : <b>${esc(rk0.ok[0].l.nom)}</b>. ${esc(raison(rk0.ok[0],c,rk0))}</span></div><button class="btn sm gold" id="drAuto" style="margin-top:10px">${ic('bolt',14)}Attribuer automatiquement</button>`:`<div class="sugg none">${ic('alert',14)}<span>Aucun livreur disponible : ${esc(resumeExclus(rk0.ko))}. Le colis reste en attente.</span></div>`):''}`:''}
    ${c.attrib&&c.livreurId?`<div class="attrbox" style="margin-top:12px"><div class="small" style="font-weight:700">${c.attrib.mode==='auto'?'Choix automatique':'Choix manuel'} · ${hm(c.attrib.t)}</div><div class="why">${esc(c.attrib.reason)}</div></div>`:''}
   </div>`:''}
   ${acts?`<div class="row wrap">${acts}</div>`:''}
   <div id="drSub"></div>
-  <div class="box"><h3>Destinataire</h3><dl class="kv"><dt>Nom</dt><dd><b>${esc(c.dest.nom)}</b></dd><dt>Téléphone</dt><dd class="num">${esc(c.dest.tel)}</dd><dt>Quartier</dt><dd>${c.zone?esc(c.zone):'<span class="faint">Non déterminé</span>'}</dd><dt>Repère</dt><dd>${esc(c.adresse)}</dd><dt>Coordonnées</dt><dd class="num">${(()=>{const g=toLL(c.x,c.y);return`${g.lat.toFixed(5)}, ${g.lng.toFixed(5)}`})()} <a class="lnk" style="font-family:var(--f-body)" href="${mapsUrl(c)}" target="_blank" rel="noopener">Google Maps</a></dd>${mgr?`<dt>Code de remise</dt><dd><span class="otp">${c.otp}</span></dd>`:''}${c.statut==='reporte'&&c.postponedDate?`<dt>Nouvelle date</dt><dd>${esc(creneauLabel(c.postponedDate))}</dd>`:''}</dl></div>
+  <div class="box"><h3>Destinataire</h3><dl class="kv"><dt>Nom</dt><dd><b>${esc(c.dest.nom)}</b></dd><dt>Téléphone</dt><dd class="num">${esc(c.dest.tel)}</dd><dt>Quartier</dt><dd>${c.zone?esc(c.zone):'<span class="faint">Non déterminé</span>'}</dd><dt>Repère</dt><dd>${esc(c.adresse)}</dd><dt>Coordonnées</dt><dd class="num">${(()=>{const g=toLL(c.x,c.y);return`${g.lat.toFixed(5)}, ${g.lng.toFixed(5)}`})()} <a class="lnk" style="font-family:var(--f-body)" href="${mapsUrl(c)}" target="_blank" rel="noopener">Google Maps</a></dd>${mgr?`<dt>Code de remise</dt><dd id="drOtpBox">${otpBoxHtml(c)}</dd>`:''}${c.statut==='reporte'&&c.postponedDate?`<dt>Nouvelle date</dt><dd>${esc(creneauLabel(c.postponedDate))}</dd>`:''}</dl></div>
   <div class="box"><h3>Expédition</h3><dl class="kv"><dt>Expéditeur</dt><dd>${esc(c.exp.nom)}</dd><dt>Téléphone</dt><dd class="num">${esc(c.exp.tel)}</dd>${HAS.weight&&c.poids?`<dt>Poids</dt><dd class="num">${String(c.poids).replace('.',',')} kg</dd>`:''}${HAS.fee?`<dt>Frais</dt><dd class="num">${fcfa(c.frais)}</dd>`:`<dt>Frais estimés</dt><dd class="num">${fcfa(c.frais)}</dd>`}<dt>Distance agence</dt><dd class="num">${km(dist(c,HQ)).toFixed(1).replace('.',',')} km</dd><dt>Enregistré</dt><dd>${dayLabel(c.createdAt)} à ${hm(c.createdAt)}</dd></dl></div>
   ${c.preuve?`<div class="box"><h3>Preuve de livraison</h3>${c.preuve.img?`<div class="proof"><img src="${c.preuve.img}" alt="Photo de preuve de livraison de ${c.code}"><small>Photo prise par ${esc(c.preuve.by)} le ${dayLabel(c.preuve.t).toLowerCase()} à ${hm(c.preuve.t)}</small></div>`:`<p class="small muted" style="margin:0">Photo prise par ${esc(c.preuve.by)} à ${hm(c.preuve.t)}, retirée du stockage local pour libérer de la place.</p>`}</div>`:''}
   <div class="box"><h3>Historique du colis</h3>${tlHtml(c)}</div>
-  <div class="row wrap"><button class="btn" id="drPub">${ic('eye',16)}Voir le suivi public</button>${mgr?`<button class="btn" id="drWa">${ic('chat',16)}Conversation WhatsApp</button>`:''}<button class="btn" id="drLink">Copier le lien de suivi</button></div>
+  <div class="row wrap"><button class="btn" id="drPub">${ic('eye',16)}Voir le suivi public</button>${mgr?`<button class="btn" id="drWa">${ic('chat',16)}Conversation WhatsApp</button>`:''}<button class="btn" id="drLink">Copier le lien de suivi</button>${mgr||isPartner()?`<button class="btn" id="drWaShare">${ic('chat',16)}Partager sur WhatsApp</button>`:''}</div>
+  ${isPartner()?'<p class="small muted" style="margin:0">Le partage WhatsApp ouvre un message prérempli que vous envoyez vous-même (pas d\'envoi automatique).</p>':''}
  </div>`;
+ const dws=$('#drWaShare');if(dws)dws.onclick=()=>{if(!trackUrl(c)){toast('Ce colis n\'a pas de jeton de suivi : aucun lien à partager','warn');return}window.open(waUrl(c,true),'_blank','noopener')};
+ const dd=$('#drDrv');if(dd&&MODE==='supabase'&&c.token&&window.FEDB){const code=c.code;window.FEDB.track(c.token).then(d=>{const el=document.getElementById('drDrv');if(!el||openCode!==code)return;
+  el.textContent=d&&d.driver_first_name?`Livreur : ${d.driver_first_name}${d.vehicle_type?' · '+d.vehicle_type:''}`:'Livreur attribué'}).catch(()=>{const el=document.getElementById('drDrv');if(el)el.textContent='Livreur attribué'})}
  $('#drX').onclick=closeAll;
  $('#drPub').onclick=()=>{if(MODE==='supabase'){const u=trackUrl(c);if(!u){toast('Ce colis n\'a pas de jeton de suivi : aucune page publique','warn');return}window.open(u,'_blank','noopener');return}closeAll();pubCode=c.code;go('suivi')};
  const dw=$('#drWa');if(dw)dw.onclick=()=>{closeAll();waSel=c.dest.tel;go('whatsapp')};
@@ -458,6 +511,12 @@ function renderDrawer(){
   const a=b.dataset.a;const sub=$('#drSub');
   if(a==='echec'){sub.innerHTML=`<div class="box"><h3>Motif de l'échec</h3><div class="row"><select class="select" id="drM">${MOTIFS.map(m=>`<option>${m}</option>`).join('')}</select><button class="btn danger" id="drMok">Valider</button></div></div>`;$('#drMok').onclick=()=>{setStatus(c,'echec',$('#drM').value);toast(`Échec enregistré pour ${c.code}`);waToast(c,'echec');refresh()};return}
   if(a==='annule'){sub.innerHTML=`<div class="box"><h3>Confirmer l'annulation</h3><p class="small muted" style="margin:0 0 10px">Le colis ${c.code} sera retiré des tournées. Cette action est enregistrée dans l'historique.</p><div class="row"><button class="btn danger" id="drCok">Oui, annuler le colis</button><button class="btn ghost" id="drCno">Garder</button></div></div>`;$('#drCno').onclick=()=>sub.innerHTML='';$('#drCok').onclick=()=>{setStatus(c,'annule','Annulé par l\'administrateur');toast(`${c.code} annulé`);refresh()};return}
+  if(a==='livrecode'){sub.innerHTML=`<div class="box"><h3>Code de remise du client</h3><p class="small muted" style="margin:0 0 10px">Saisissez le code à 4 chiffres que le client communique. La livraison n'est enregistrée que si le code est correct.</p><div class="row"><input class="input otp-in" id="drCode" inputmode="numeric" maxlength="4" placeholder="••••" aria-label="Code de remise du client" autocomplete="off" style="max-width:140px"><button class="btn pri" id="drCodeOk">${ic('check',16)}Valider la livraison</button></div><div class="errbox" id="drCodeErr" hidden style="margin-top:10px"></div></div>`;
+   const go_=async()=>{const bt=$('#drCodeOk');if(bt.disabled)return;bt.disabled=true;const er=$('#drCodeErr');
+    const r=await confirmDelivery(c,$('#drCode').value,me0());
+    if(!r.ok){bt.disabled=false;er.hidden=false;er.innerHTML=ic('alert',16)+`<span>${r.msg}</span>`;return}
+    toast(`${c.code} : livraison confirmée avec le code du client`);waToast(c,'livre');refresh()};
+   $('#drCodeOk').onclick=go_;$('#drCode').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();go_()}});$('#drCode').focus();return}
   if(a==='reprog'){setStatus(c,'en_attente','Reprogrammé après échec');toast(`${c.code} remis en attente d'attribution`);refresh();return}
   setStatus(c,a);toast(`${c.code} : ${ST[a].l}`);waToast(c,a);refresh()});
 }
@@ -560,6 +619,7 @@ function saveNewColis(){
   // afficher le colis dans la liste : filtres réinitialisés et ligne mise en évidence
   colisF={q:'',s:'tous',z:'',p:'auj'};newCode=c.code;
   closeAll();
+  if(isPartner()){savingColis=false;render();pCreatedModal(c);if(!persisted&&MODE==='demo')toast('Stockage local indisponible : le colis restera visible jusqu\'à la fermeture de la page');return}
   if(cur==='colis')render();else go('colis');
   toast(`Colis ${c.code} enregistré${c.livreurId?' et attribué à '+esc(LV(c.livreurId).nom):''}`);
   if(sent)waToast(c,'creation');
@@ -612,6 +672,11 @@ const VIEWS=[
 const PVIEWS=[{g:'Mon espace'},
  {id:'partenaire',l:'Tableau de bord',i:'grid',sub:()=>PA(AUTH?.partnerId)?.company_name||'Espace partenaire'},
  {id:'colis',l:'Mes colis',i:'box',sub:()=>'Vos envois confiés à FAST EXPRESS'},
+ {id:'psuivi',l:'Suivi en direct',i:'map',sub:()=>'Position récente des livreurs de vos colis en route'},
+ {id:'phisto',l:'Historique',i:'clock',sub:()=>'Vos colis livrés, annulés et reportés'},
+ {g:'Gestion'},
+ {id:'preleves',l:'Mes relevés',i:'gauge',sub:()=>'Bilan de vos envois par période'},
+ {id:'pentreprise',l:'Mon entreprise',i:'users',sub:()=>'Coordonnées de votre entreprise'},
  {id:'suivi',l:'Suivi client',i:'eye',sub:()=>'La page que consultent vos clients'}];
 const viewsFor=()=>isPartner()?PVIEWS:VIEWS.filter(v=>!(v.demo&&MODE!=='demo'));
 let cur='tableau';
@@ -1072,7 +1137,7 @@ function drvSheetHtml(){
  if(k==='confirm')return`<div class="drv-sheet-bg" data-close></div><div class="drv-sheet" role="dialog" aria-label="Confirmer la livraison"><span class="grab"></span>
   <h3>Confirmer la livraison</h3><p class="small muted" style="margin:0">${c.code} · ${esc(c.dest.nom)}. Demandez le code à 4 chiffres reçu par le client sur WhatsApp.</p>
   <input class="input otp-in" id="dsOtp" inputmode="numeric" maxlength="4" placeholder="••••" aria-label="Code de livraison" autocomplete="one-time-code">
-  <p class="small faint" style="margin:-4px 0 0;text-align:center">Code pour la démo : <b class="mono">${c.otp}</b></p>
+  ${MODE==='demo'?`<p class="small faint" style="margin:-4px 0 0;text-align:center">Code pour la démo : <b class="mono">${c.otp}</b></p>`:''}
   ${HAS.cod&&c.cod?`<label class="row" style="gap:10px;font-weight:600;font-size:14px;padding:10px 12px;background:var(--gold-soft);border-radius:10px;color:var(--gold-ink)"><input type="checkbox" id="dsCash" style="width:20px;height:20px;accent-color:var(--brand)"> J'ai encaissé ${fcfa(c.cod)}</label>`:''}
   <div class="field"><label>Photo de preuve (facultative)</label>${drvPhoto?`<div class="photo-prev"><img src="${drvPhoto}" alt="Aperçu de la photo de preuve"><button type="button" id="dsPhotoDel">Retirer</button></div>`:`<label class="photo-drop" for="dsPhoto">${ic('eye',20)}<span>Prendre ou choisir une photo<br><small class="faint" style="font-weight:500">Colis remis, portail, signature…</small></span><input type="file" id="dsPhoto" accept="image/*" capture="environment" aria-label="Ajouter une photo de preuve"></label>`}</div>
   <div class="errbox" id="dsErr" hidden></div>
@@ -1094,18 +1159,19 @@ function drvAct(fn){if(drvBusy)return;drvBusy=true;try{fn()}finally{drvBusy=fals
 const gpsOpts=()=>GPS.last?{lat:GPS.last.coords.latitude,lng:GPS.last.coords.longitude}:{};
 function drvPick(code){drvAct(()=>{const c=myColis(code);if(!c)return;if(c.statut!=='attribue'){R.livreur();return}const l=me();setStatus(c,'recupere',null,l.nom,gpsOpts());toast(`${c.code} : colis récupéré`);waToast(c,'recupere');R.livreur()})}
 function drvStart(code){drvAct(()=>{const c=myColis(code);if(!c)return;if(c.statut!=='recupere'){R.livreur();return}const l=me();setStatus(c,'en_cours',null,l.nom,gpsOpts());toast(`${c.code} : livraison commencée`);waToast(c,'en_cours');R.livreur()})}
-function drvConfirm(){drvAct(()=>{
- const c=myColis(drvSheet.code);if(!c)return;const er=$('#dsErr');const l=me();
+async function drvConfirm(){if(drvBusy)return;drvBusy=true;try{
+ const c=myColis(drvSheet&&drvSheet.code);if(!c)return;const er=$('#dsErr');const l=me();
  if(c.statut!=='en_cours'){drvSheet=null;R.livreur();return}
  const fail=m=>{er.hidden=false;er.innerHTML=ic('alert',16)+`<span>${m}</span>`};
- if($('#dsOtp').value.trim()!==c.otp)return fail('Code de livraison incorrect. Vérifiez avec le client.');
  if(HAS.cod&&c.cod&&!$('#dsCash').checked)return fail(`Confirmez l'encaissement de ${fcfa(c.cod)}.`);
- if(drvPhoto)c.preuve={img:drvPhoto,t:Date.now(),by:l.nom};
- setStatus(c,'livre',null,l.nom,gpsOpts());
+ const bt=$('#dsOk');if(bt)bt.disabled=true;
+ const prev=c.preuve;if(drvPhoto)c.preuve={img:drvPhoto,t:Date.now(),by:l.nom};
+ const r=await confirmDelivery(c,$('#dsOtp').value,l.nom,gpsOpts());
+ if(!r.ok){c.preuve=prev;if(bt)bt.disabled=false;return fail(r.msg)}
  const kept=storageOK();
  drvSheet=null;drvPhoto=null;drvDetail=null;toast(`${c.code} livré${c.preuve?' · photo enregistrée':''}`);waToast(c,'livre');
  if(c.preuve&&!kept)toast('Stockage local plein : la photo reste visible jusqu\'à la fermeture de la page','warn');
- R.livreur()})}
+ R.livreur()}finally{drvBusy=false}}
 function drvIssue(){drvAct(()=>{
  const c=myColis(drvSheet.code);if(!c)return;const er=$('#dsErr');const l=me();const t=drvSheet.type||'reporte';
  if(!ACTIVE.includes(c.statut)){drvSheet=null;R.livreur();return}
@@ -1424,6 +1490,10 @@ setInterval(()=>{if(MODE!=='demo'||!S)return;S.livreurs.forEach(l=>{if(onDuty(l)
 /* Supabase : relecture de sécurité des positions toutes les 30 s (si le temps réel n'arrive pas) */
 setInterval(()=>{if(MODE!=='supabase'||!AUTH||!isMgr()||!window.FEDB||document.visibilityState!=='visible'||!navigator.onLine)return;
  window.FEDB.pollLive().then(ch=>{if(ch)onRemoteChange()}).catch(e=>console.warn('[Supabase] relecture des positions',e))},CFG.livePollMs||30000);
+/* Colonne du code protégée (deliveryCodeRpc) : relecture périodique des colis, au cas où le temps réel
+   des colis ne serait plus transmis par Supabase (lecture seule, page visible uniquement). */
+setInterval(()=>{if(MODE!=='supabase'||!CFG.deliveryCodeRpc||!AUTH||!window.FEDB||document.visibilityState!=='visible'||!navigator.onLine)return;
+ window.FEDB.pollParcels().then(ch=>{if(ch)onRemoteChange()}).catch(e=>console.warn('[Supabase] relecture des colis',e))},CFG.parcelPollMs||30000);
 /* Les états « À jour / Ancienne / Indisponible » évoluent avec le temps */
 setInterval(()=>{if(AUTH&&isMgr())rtRefresh()},30000);
 
@@ -1576,28 +1646,334 @@ document.addEventListener('visibilitychange',()=>{
 });
 
 /* =========================================================
-   Espace partenaire : tableau de bord
+   ESPACE PARTENAIRE (entreprises expéditrices)
+   Toutes les données viennent des colis du partenaire connecté (AUTH.partnerId).
+   En mode Supabase, les règles RLS ne lui renvoient de toute façon que ses colis.
+   Le code de remise n'est jamais affiché au partenaire.
    ========================================================= */
+const myParcels=()=>S.colis.filter(c=>c.partnerId===AUTH.partnerId);
+const P_FINAL=['livre','annule','reporte','echec'];
+const P_WAIT=['en_attente','attribue','recupere'];
+/* Date de fin d'un colis : livraison (ou dernier événement pour les autres statuts finaux) */
+const pEndT=c=>{const h=[...c.hist].reverse().find(x=>x.s===c.statut);return h?h.t:lastT(c)};
+const pDate=t=>new Date(t).toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'numeric'});
+const pDateHm=t=>pDate(t)+' '+hm(t);
+const pDot=s=>s==='livre'?'d-livre':['echec','annule','reporte'].includes(s)?'d-echec':s==='attribue'?'d-attribution':'d-statut';
+
+/* ---------- Partage WhatsApp MANUEL (lien wa.me prérempli ; aucun envoi automatique) ---------- */
+function waDigits(tel){let d=String(tel||'').replace(/\D/g,'');if(!d)return'';if(d.startsWith('00'))d=d.slice(2);
+ if(!d.startsWith('241'))d='241'+d;return d.length>=11?d:''}
+function waMsg(c){const P=PA(c.partnerId);const u=trackUrl(c);
+ return`Bonjour ${first(c.dest.nom)}, votre colis ${c.code} expédié par ${P?P.company_name:c.exp.nom} est pris en charge par FAST EXPRESS.`+(u?` Suivez sa livraison ici : ${u}`:'')}
+function waUrl(c,toRecipient){const t=encodeURIComponent(waMsg(c));const d=toRecipient?waDigits(c.dest.tel):'';
+ return d?`https://wa.me/${d}?text=${t}`:`https://wa.me/?text=${t}`}
+function copyText(txt,okMsg){if(!txt)return;(navigator.clipboard?navigator.clipboard.writeText(txt):Promise.reject()).then(()=>toast(okMsg),()=>toast(esc(txt),'warn'))}
+
+/* ---------- Tableau de bord ---------- */
 R.partenaire=()=>{
- const P=PA(AUTH.partnerId);const mine=S.colis.filter(c=>c.partnerId===AUTH.partnerId);const t0=sod(Date.now());
- const w7=mine.filter(c=>c.createdAt>=t0-6*D);const done=w7.filter(c=>['livre','echec'].includes(c.statut));const ok=w7.filter(c=>c.statut==='livre');
- const act=mine.filter(c=>['en_attente',...ACTIVE].includes(c.statut));
- const cash=HAS.cod?mine.filter(c=>c.statut==='livre'&&lastT(c)>=t0-6*D).reduce((a,c)=>a+c.cod,0):0;
+ const P=PA(AUTH.partnerId);const mine=myParcels();
+ const n=l=>mine.filter(c=>l.includes(c.statut)).length;
+ const attente=n(P_WAIT),route=n(['en_cours']),livres=n(['livre']),annules=n(['annule']),reportes=n(['reporte']),echecs=n(['echec']);
+ const termines=livres+echecs;const taux=termines?Math.round(livres/termines*100):null;
+ const recents=[...mine].sort((a,b)=>b.createdAt-a.createdAt).slice(0,6);
+ const finis=mine.filter(c=>P_FINAL.includes(c.statut)).sort((a,b)=>pEndT(b)-pEndT(a)).slice(0,6);
+ const activite=mine.flatMap(c=>c.hist.filter(h=>h.s!=='en_attente').map(h=>({c,h}))).sort((a,b)=>b.h.t-a.h.t).slice(0,8);
+ const row=c=>`<tr data-c="${c.code}"><td class="mono" style="font-weight:600">${c.code}</td><td>${esc(c.dest.nom)}</td><td>${esc(zoneLabel(c))}</td><td>${badge(c.statut)}</td><td class="small muted">${ago(c.createdAt)}</td></tr>`;
+ const kpi=(cls,icon,l,v,d,id)=>`<div class="card kpi ${cls}" id="${id}"><span class="l">${ic(icon,15)}${l}</span><span class="v">${v}</span><span class="d">${d}</span></div>`;
  $('#view').innerHTML=`
- <div class="kpis" style="grid-template-columns:repeat(4,minmax(0,1fr))">
-  <div class="card kpi hero"><span class="l">${ic('box',15)}Colis en cours</span><span class="v">${act.length}</span><span class="d">${act.filter(c=>c.statut==='en_cours').length} sur la route</span></div>
-  <div class="card kpi"><span class="l">${ic('check',15)}Livrés sur 7 jours</span><span class="v">${ok.length}</span><span class="d">${w7.length} colis confiés</span></div>
-  <div class="card kpi"><span class="l">${ic('gauge',15)}Taux de réussite</span><span class="v">${done.length?Math.round(ok.length/done.length*100):'–'}<small> %</small></span><span class="d">Sur 7 jours</span></div>
-  <div class="card kpi"><span class="l">${ic('cash',15)}${HAS.cod?'Encaissé pour vous':'Colis reportés'}</span><span class="v">${HAS.cod?NF.format(Math.round(cash/1000))+'<small> k FCFA</small>':w7.filter(c=>c.statut==='reporte').length}</span><span class="d">${HAS.cod?'Paiements à la livraison, 7 jours':'Sur 7 jours'}</span></div>
+ <div class="pqa">
+  <button class="btn pri" id="pNew">${ic('plus',16)}Nouveau colis</button>
+  <button class="btn" data-pgo="colis">${ic('box',16)}Mes colis</button>
+  <button class="btn" data-pgo="psuivi">${ic('map',16)}Suivi en direct</button>
+  <button class="btn" data-pgo="phisto">${ic('clock',16)}Historique</button>
  </div>
- <div class="card"><div class="card-h"><div><h2>Vos colis en cours</h2><p>${esc(P?.company_name||'')} · suivi en temps réel</p></div><button class="btn pri" id="pNew">${ic('plus',16)}Nouveau colis</button></div>
-  <div class="tbl-wrap"><table><thead><tr><th>N° de suivi</th><th>Destinataire</th><th>Quartier</th><th>Statut</th><th>Dernière étape</th></tr></thead>
-  <tbody>${act.map(c=>`<tr data-c="${c.code}"><td class="mono" style="font-weight:600">${c.code}</td><td>${esc(c.dest.nom)}<span class="sub num">${esc(c.dest.tel)}</span></td><td>${esc(zoneLabel(c))}</td><td>${badge(c.statut)}</td><td class="small muted">${ago(lastT(c))}</td></tr>`).join('')}</tbody></table>
-  ${act.length?'':`<div class="empty">${ic('box',26)}Aucun colis en cours. Créez un envoi avec « Nouveau colis ».</div>`}</div></div>
- <div class="card"><div class="card-h"><div><h2>Dernières livraisons</h2><p>Les 8 derniers colis terminés</p></div></div><div class="card-b" style="padding-top:6px">${mine.filter(c=>!['en_attente',...ACTIVE].includes(c.statut)).sort((a,b)=>lastT(b)-lastT(a)).slice(0,8).map(c=>`<div class="todo"><button class="lnk" data-open="${c.code}">${c.code}</button><span class="small" style="flex:1;min-width:0">${esc(c.dest.nom)} · ${esc(zoneLabel(c))}</span>${badge(c.statut)}</div>`).join('')||'<p class="small muted" style="margin:0">Pas encore de livraison terminée.</p>'}</div></div>`;
+ <div class="kpis pkpis">
+  ${kpi('hero','box','Colis créés',mine.length,`${esc(P?.company_name||'')}`,'pkTotal')}
+  ${kpi('','clock','En attente',attente,'Pas encore en route','pkAttente')}
+  ${kpi('','truck','En cours de livraison',route,'Sur la route','pkRoute')}
+  ${kpi('','check','Livrés',livres,'Remis au destinataire','pkLivres')}
+  ${kpi('','x','Annulés',annules,'Retirés des tournées','pkAnnules')}
+  ${kpi('','refresh','Reportés',reportes,`${echecs} échec${echecs>1?'s':''} de livraison`,'pkReportes')}
+  ${kpi('','gauge','Taux de réussite',taux==null?'–':taux+'<small> %</small>',termines?`${livres} livrés sur ${termines} terminés`:'Aucune livraison terminée','pkTaux')}
+ </div>
+ <div class="grid dash-a">
+  <div class="card"><div class="card-h"><div><h2>Derniers colis créés</h2><p>Vos 6 envois les plus récents</p></div></div>
+   ${recents.length?`<div class="tbl-wrap"><table><thead><tr><th>N° de suivi</th><th>Destinataire</th><th>Quartier</th><th>Statut</th><th>Créé</th></tr></thead><tbody>${recents.map(row).join('')}</tbody></table></div>`
+     :`<div class="empty">${ic('box',26)}Aucun colis pour le moment.<br>Créez votre premier envoi avec « Nouveau colis ».</div>`}</div>
+  <div class="card"><div class="card-h"><div><h2>Activité récente</h2><p>Les dernières étapes de vos colis</p></div></div><div class="card-b" style="padding-top:4px">
+   ${activite.length?`<div class="feed">${activite.map(({c,h})=>`<div class="feed-i" data-c="${c.code}" style="cursor:pointer"><span class="dot ${pDot(h.s)}">${ic(h.s==='livre'?'check':['echec','annule','reporte'].includes(h.s)?'alert':'truck',14)}</span><div><p><b class="mono">${c.code}</b> · ${ST[h.s]?ST[h.s].l:''}${['echec','annule','reporte'].includes(h.s)&&c.statut===h.s&&c.motif?` · ${esc(c.motif)}`:''}</p><small>${esc(c.dest.nom)} · ${dayLabel(h.t)} à ${hm(h.t)}</small></div></div>`).join('')}</div>`
+     :`<div class="empty" style="padding:20px 8px">${ic('clock',22)}Aucune activité pour le moment.</div>`}
+   <p class="small muted" style="margin:10px 0 0">Les messages WhatsApp aux destinataires ne sont pas envoyés automatiquement : partagez le suivi depuis la fiche de chaque colis.</p>
+  </div></div>
+ </div>
+ <div class="card"><div class="card-h"><div><h2>Dernières livraisons terminées</h2><p>Livrés, annulés et reportés</p></div><button class="btn sm" data-pgo="phisto">Tout l'historique</button></div>
+  ${finis.length?`<div class="tbl-wrap"><table><thead><tr><th>N° de suivi</th><th>Destinataire</th><th>Quartier</th><th>Statut final</th><th>Terminé</th></tr></thead><tbody>${finis.map(c=>`<tr data-c="${c.code}"><td class="mono" style="font-weight:600">${c.code}</td><td>${esc(c.dest.nom)}</td><td>${esc(zoneLabel(c))}</td><td>${badge(c.statut)}</td><td class="small muted">${dayLabel(pEndT(c))} · ${hm(pEndT(c))}</td></tr>`).join('')}</tbody></table></div>`
+    :`<div class="empty">${ic('check',26)}Aucune livraison terminée pour le moment.</div>`}
+ </div>`;
  $('#pNew').onclick=newColisModal;
- document.querySelectorAll('tr[data-c]').forEach(r=>r.onclick=()=>openColis(r.dataset.c));bindOpen();
+ document.querySelectorAll('[data-pgo]').forEach(b=>b.onclick=()=>go(b.dataset.pgo));
+ document.querySelectorAll('#view [data-c]').forEach(r=>r.onclick=()=>openColis(r.dataset.c));
 };
+
+/* ---------- Confirmation après création (partenaire) ---------- */
+function pCreatedModal(c){
+ const u=trackUrl(c);const canWa=!!waDigits(c.dest.tel);
+ openModal(`<div class="md-h"><div><h2>Colis enregistré</h2><p class="small muted" style="margin:2px 0 0">${esc(c.dest.nom)} · ${esc(zoneLabel(c))}</p></div><button type="button" class="x" id="mX" aria-label="Fermer">${ic('x')}</button></div>
+ <div class="md-b stack" style="gap:14px">
+  <div class="box"><h3>Numéro de suivi</h3><div class="mono" id="pcCode" style="font-size:22px;font-weight:700;letter-spacing:.02em">${c.code}</div>
+   <p class="small" id="pcSync" style="margin:8px 0 0">${MODE==='supabase'?`${ic('clock',14)} Enregistrement en cours…`:`${ic('check',14)} Colis enregistré.`}</p></div>
+  <div class="box"><h3>Lien de suivi pour le client</h3>${u?`<input class="input mono" id="pcLink" readonly value="${esc(u)}" style="font-size:12.5px" aria-label="Lien de suivi">`:'<p class="small muted" style="margin:0">Lien indisponible pour ce colis.</p>'}</div>
+  <p class="small muted" style="margin:0">WhatsApp s'ouvre avec le message prérempli : c'est vous qui l'envoyez. L'envoi automatique n'est pas encore activé.</p>
+ </div>
+ <div class="md-f" style="flex-wrap:wrap;gap:8px">
+  <button class="btn" type="button" id="pcCopy" ${u?'':'disabled'}>Copier le lien</button>
+  <button class="btn" type="button" id="pcWa" ${u&&canWa?'':'disabled'}>${ic('chat',16)}Envoyer au destinataire</button>
+  <button class="btn" type="button" id="pcWaAny" ${u?'':'disabled'}>Partager sur WhatsApp</button>
+  <button class="btn" type="button" id="pcOpen">Voir le colis</button>
+  <button class="btn pri" type="button" id="pcNew">${ic('plus',16)}Nouveau colis</button>
+ </div>`);
+ $('#mX').onclick=closeAll;
+ $('#pcCopy').onclick=()=>copyText(u,'Lien de suivi copié');
+ $('#pcWa').onclick=()=>window.open(waUrl(c,true),'_blank','noopener');
+ $('#pcWaAny').onclick=()=>window.open(waUrl(c,false),'_blank','noopener');
+ $('#pcOpen').onclick=()=>{closeAll();openColis(c.code)};
+ $('#pcNew').onclick=()=>{closeAll();newColisModal()};
+ if(MODE==='supabase'&&c._sync)c._sync.then(()=>{const el=document.getElementById('pcSync');if(!el)return;
+  if(c.dbId){el.innerHTML=`${ic('check',14)} Enregistré dans Supabase.`}
+  else{el.innerHTML=`${ic('alert',14)} <b>L'enregistrement a échoué</b> : ce colis n'a pas été créé. Réessayez ou contactez FAST EXPRESS.`;el.style.color='var(--bad)';
+   ['pcCopy','pcWa','pcWaAny','pcOpen'].forEach(id=>{const b=document.getElementById(id);if(b)b.disabled=true})}});
+}
+
+/* ---------- Suivi en direct : position récente du livreur pour les colis en cours ----------
+   Supabase : uniquement par la fonction sécurisée track_parcel (une position récente par colis,
+   jamais l'historique, aucun accès à driver_locations). Démo : positions de démonstration.
+   Aucune position inventée ; au-delà de 10 minutes, la position n'est plus affichée. */
+const PSV={res:{},at:0,loading:false,map:null,mk:{},sel:null};
+function psPos(c){
+ const now=Date.now();
+ if(MODE!=='supabase'){const L=LV(c.livreurId);if(!L||!L.pos||!L.posAt||!onDuty(L))return{drv:L?first(L.nom):null,veh:L?L.vehicule.split(' ')[0]:null,pos:null};
+  const g=toLL(L.pos.x,L.pos.y);const age=now-L.posAt;
+  return{drv:first(L.nom),veh:L.vehicule.split(' ')[0],pos:age<=PUB_MAX_AGE?{lat:g.lat,lng:g.lng,rec:L.posAt,age}:null}}
+ const r=PSV.res[c.code];if(!r||!r.d)return{drv:null,veh:null,pos:null,err:r&&r.err};
+ const d=r.d,p=d.driver_position;let pos=null;
+ if(p&&d.status==='en_cours'){const lat=Number(p.lat),lng=Number(p.lng),rec=pubTs(p.recorded_at),srv=pubTs(d.server_time);
+  if(lat>=-90&&lat<=90&&lng>=-180&&lng<=180&&rec!=null&&srv!=null){const age=Math.max(0,srv-rec)+Math.max(0,now-r.fetchedAt);if(age<=PUB_MAX_AGE)pos={lat,lng,rec,age}}}
+ return{drv:d.driver_first_name||null,veh:d.vehicle_type||null,pos}}
+async function psFetch(force){
+ if(MODE!=='supabase'||PSV.loading)return;if(!force&&Date.now()-PSV.at<PUB_MS-250)return;
+ const route=myParcels().filter(c=>c.statut==='en_cours'&&c.token).slice(0,30);
+ PSV.loading=true;PSV.at=Date.now();psPaint();
+ for(let i=0;i<route.length;i+=4){
+  await Promise.all(route.slice(i,i+4).map(c=>window.FEDB.track(c.token)
+   .then(d=>{PSV.res[c.code]={d,fetchedAt:Date.now()}})
+   .catch(e=>{console.warn('[FAST EXPRESS] suivi',c.code,e);PSV.res[c.code]={err:true,fetchedAt:Date.now(),d:PSV.res[c.code]&&PSV.res[c.code].d}})));
+ }
+ PSV.loading=false;if(cur==='psuivi')psPaint();
+}
+R.psuivi=()=>{
+ if(PSV.map){try{PSV.map.remove()}catch(e){}PSV.map=null;PSV.mk={}}
+ $('#view').innerHTML=`
+ <div class="grid mapgrid">
+  <div class="map"><div id="pmap" class="lmap" role="region" aria-label="Carte : livreurs de vos colis en cours de livraison"></div></div>
+  <div class="card" style="min-width:0"><div class="card-h"><div><h2>Colis en livraison</h2><p id="psInfo"></p></div><button class="btn sm" id="psRef">${ic('refresh',14)}Actualiser</button></div>
+   <div class="card-b stack" id="psList" style="gap:10px"></div></div>
+ </div>
+ <div class="card" id="psWaitCard"></div>`;
+ if(typeof L!=='undefined'){
+  PSV.map=L.map('pmap',{zoomControl:true,attributionControl:true}).setView([HQ.lat,HQ.lng],13);
+  mountTiles(PSV.map);
+  setTimeout(()=>{if(PSV.map)PSV.map.invalidateSize()},80);
+ }
+ $('#psRef').onclick=()=>{if(MODE==='supabase')psFetch(true);else psPaint();toast('Positions actualisées')};
+ psPaint();psFetch(false);
+};
+function psPaint(){
+ const list=document.getElementById('psList');if(!list)return;
+ const mine=myParcels();const route=mine.filter(c=>c.statut==='en_cours');const wait=mine.filter(c=>['attribue','recupere'].includes(c.statut));
+ const info=document.getElementById('psInfo');
+ if(info)info.textContent=PSV.loading?'Actualisation en cours…':MODE==='supabase'?(PSV.at?`Positions vérifiées à ${hm(PSV.at)} · actualisation automatique toutes les ${Math.round(PUB_MS/60000)||1} min`:''):'Données de démonstration';
+ const rows=route.map(c=>({c,...psPos(c)}));
+ list.innerHTML=rows.length?rows.map(({c,drv,veh,pos,err})=>`<div class="ps-item ${PSV.sel===c.code?'on':''}" data-psc="${c.code}">
+   <div class="row between" style="gap:8px"><b class="mono">${c.code}</b>${badge(c.statut)}</div>
+   <div class="small">${esc(c.dest.nom)} · ${esc(zoneLabel(c))}</div>
+   <div class="small muted">${drv?`Livreur : ${esc(drv)}${veh?' · '+esc(veh):''}`:'Livreur : information indisponible'}</div>
+   <div class="small ${pos?'t-ok':'t-warn'}">${pos?`${ic('pin',13)} Position de ${hm(pos.rec)} (${pubAge(pos.age)})`:`${ic('clock',13)} Position indisponible ou trop ancienne${err?' (vérification impossible pour le moment)':''}`}</div>
+   <div class="row wrap" style="gap:6px"><button class="btn sm" data-psfocus="${c.code}" ${pos?'':'disabled'}>Centrer</button><button class="btn sm" data-psopen="${c.code}">Fiche</button><button class="btn sm" data-pspub="${c.code}">${ic('eye',13)}Suivi public</button></div>
+  </div>`).join('')
+  :`<div class="empty" style="padding:22px 8px">${ic('truck',24)}Aucun de vos colis n'est en cours de livraison.<br>La position du livreur s'affichera ici dès qu'un colis sera en route.</div>`;
+ const wc=document.getElementById('psWaitCard');
+ if(wc)wc.innerHTML=`<div class="card-h"><div><h2>Bientôt en route</h2><p>Colis attribués ou récupérés : la position apparaîtra au départ du livreur</p></div></div>${wait.length?`<div class="tbl-wrap"><table><thead><tr><th>N° de suivi</th><th>Destinataire</th><th>Quartier</th><th>Statut</th></tr></thead><tbody>${wait.map(c=>`<tr data-c="${c.code}"><td class="mono" style="font-weight:600">${c.code}</td><td>${esc(c.dest.nom)}</td><td>${esc(zoneLabel(c))}</td><td>${badge(c.statut)}</td></tr>`).join('')}</tbody></table></div>`:`<div class="empty" style="padding:18px">Aucun colis en préparation.</div>`}`;
+ // Carte : un marqueur par colis dont la position est récente ; les autres sont retirés
+ if(PSV.map){const seen={};const pts=[];
+  rows.forEach(({c,drv,pos})=>{if(!pos)return;seen[c.code]=1;const ll=[pos.lat,pos.lng];pts.push(ll);
+   const ini=esc(String(drv||'L').trim().charAt(0).toUpperCase()||'L');
+   if(!PSV.mk[c.code])PSV.mk[c.code]=L.marker(ll,{icon:L.divIcon({className:'lmk pos-fresh pub-mk',html:`<span style="background:#0c6c49">${ini}</span>`,iconSize:[30,30]}),title:c.code}).bindTooltip(`${c.code} · ${hm(pos.rec)}`).on('click',()=>{PSV.sel=c.code;psPaint()}).addTo(PSV.map);
+   else{PSV.mk[c.code].setLatLng(ll);PSV.mk[c.code].setTooltipContent(`${c.code} · ${hm(pos.rec)}`)}});
+  Object.keys(PSV.mk).forEach(k=>{if(!seen[k]){PSV.mk[k].remove();delete PSV.mk[k]}});
+  if(pts.length&&!PSV.fitted){PSV.map.fitBounds(pts,{padding:[40,40],maxZoom:15});PSV.fitted=true}
+ }
+ list.querySelectorAll('[data-psfocus]').forEach(b=>b.onclick=()=>{const m=PSV.mk[b.dataset.psfocus];PSV.sel=b.dataset.psfocus;if(m&&PSV.map)PSV.map.setView(m.getLatLng(),16);psPaint()});
+ list.querySelectorAll('[data-psopen]').forEach(b=>b.onclick=()=>openColis(b.dataset.psopen));
+ list.querySelectorAll('[data-pspub]').forEach(b=>b.onclick=()=>{const c=CO(b.dataset.pspub);if(!c)return;if(MODE==='supabase'){const u=trackUrl(c);if(u)window.open(u,'_blank','noopener');else toast('Lien de suivi indisponible','warn')}else{pubCode=c.code;go('suivi')}});
+ document.querySelectorAll('#psWaitCard [data-c]').forEach(r=>r.onclick=()=>openColis(r.dataset.c));
+}
+/* Actualisation : position relue toutes les 2 minutes (page visible), âge recalculé toutes les 15 s */
+setInterval(()=>{if(cur!=='psuivi'||!AUTH||!isPartner()||document.visibilityState!=='visible')return;
+ if(MODE==='supabase')psFetch(false);psPaint()},Math.max(500,Math.min(15000,Math.round(PUB_MS/4))));
+
+/* ---------- Historique des livraisons ---------- */
+let PH={q:'',s:'tous',p:'30j'};
+const pPeriod=(p,t)=>{const t0=sod(Date.now());return p==='7j'?t>=t0-6*D:p==='30j'?t>=t0-29*D:p==='mois'?t>=new Date(new Date().getFullYear(),new Date().getMonth(),1).getTime():true};
+R.phisto=()=>{
+ const q=PH.q.toLowerCase();
+ const base=myParcels().filter(c=>P_FINAL.includes(c.statut)&&pPeriod(PH.p,pEndT(c))&&(!q||[c.code,c.dest.nom,c.dest.tel,zoneLabel(c)].join(' ').toLowerCase().includes(q)));
+ const list=base.filter(c=>PH.s==='tous'||c.statut===PH.s).sort((a,b)=>pEndT(b)-pEndT(a));
+ const cnt=s=>base.filter(c=>c.statut===s).length;
+ $('#view').innerHTML=`
+ <div class="toolbar">
+  <div class="search">${ic('search',16)}<input class="input" id="phQ" placeholder="N° de suivi, destinataire, quartier…" value="${esc(PH.q)}" aria-label="Rechercher"></div>
+  <select class="select" id="phP" style="width:auto" aria-label="Période">${[['7j','7 derniers jours'],['30j','30 derniers jours'],['mois','Ce mois-ci'],['tout','Tout l\'historique']].map(([v,l])=>`<option value="${v}" ${PH.p===v?'selected':''}>${l}</option>`).join('')}</select>
+ </div>
+ <div class="chips" id="phS">${[['tous','Tous',base.length],['livre','Livrés',cnt('livre')],['echec','Non livrés',cnt('echec')],['reporte','Reportés',cnt('reporte')],['annule','Annulés',cnt('annule')]].map(([k,l,n])=>`<button class="chip ${PH.s===k?'on':''}" data-s="${k}">${l}<b>${n}</b></button>`).join('')}</div>
+ <div class="card"><div class="tbl-wrap"><table>
+  <thead><tr><th>N° de suivi</th><th>Destinataire</th><th>Quartier</th><th>Créé le</th><th>Terminé le</th><th>Statut final</th><th>Motif</th></tr></thead>
+  <tbody>${list.slice(0,300).map(c=>`<tr data-c="${c.code}"><td class="mono" style="font-weight:600">${c.code}</td><td>${esc(c.dest.nom)}</td><td>${esc(zoneLabel(c))}</td><td class="small num">${pDateHm(c.createdAt)}</td><td class="small num">${pDateHm(pEndT(c))}</td><td>${badge(c.statut)}</td><td class="small muted">${c.statut==='livre'?'':esc(c.motif||'')}</td></tr>`).join('')}</tbody></table>
+  ${list.length?'':`<div class="empty">${ic('clock',26)}Aucun colis terminé ne correspond à ces filtres.</div>`}
+ </div></div>
+ <p class="small muted" style="margin:0">${list.length} colis${list.length>300?' (300 premiers affichés)':''} · Cliquez sur une ligne pour voir l'historique détaillé du colis.</p>`;
+ const qi=$('#phQ');qi.oninput=e=>{PH.q=e.target.value;const p=e.target.selectionStart;R.phisto();const nq=$('#phQ');nq.focus();nq.setSelectionRange(p,p)};
+ $('#phP').onchange=e=>{PH.p=e.target.value;R.phisto()};
+ document.querySelectorAll('#phS [data-s]').forEach(b=>b.onclick=()=>{PH.s=b.dataset.s;R.phisto()});
+ document.querySelectorAll('#view tr[data-c]').forEach(r=>r.onclick=()=>openColis(r.dataset.c));
+};
+
+/* ---------- Mes relevés (période, export CSV, impression / PDF) ---------- */
+const isoDay=t=>{const d=new Date(t);return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
+const dayStart=s=>{const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(s||'');return m?new Date(+m[1],+m[2]-1,+m[3]).getTime():null};
+let PR={from:isoDay(new Date(new Date().getFullYear(),new Date().getMonth(),1)),to:isoDay(Date.now())};
+function prData(){
+ const a=dayStart(PR.from),b=dayStart(PR.to);if(a==null||b==null||b<a)return null;const end=b+D-1;
+ const list=myParcels().filter(c=>c.createdAt>=a&&c.createdAt<=end).sort((x,y)=>x.createdAt-y.createdAt);
+ const n=s=>list.filter(c=>c.statut===s).length;
+ const st={crees:list.length,livres:n('livre'),nonlivres:n('echec'),annules:n('annule'),reportes:n('reporte')};
+ st.encours=st.crees-st.livres-st.nonlivres-st.annules-st.reportes;
+ st.taux=st.livres+st.nonlivres?Math.round(st.livres/(st.livres+st.nonlivres)*100):null;
+ st.cod=HAS.cod?list.filter(c=>c.statut==='livre').reduce((s,c)=>s+(c.cod||0),0):null;
+ return{a,end,list,st}}
+R.preleves=()=>{
+ const P=PA(AUTH.partnerId);const r=prData();
+ const pres=[['mois','Ce mois-ci'],['prec','Mois dernier'],['7j','7 derniers jours'],['30j','30 derniers jours']];
+ const tile=(l,v,id)=>`<div class="card kpi" id="${id}"><span class="l">${l}</span><span class="v">${v}</span></div>`;
+ $('#view').innerHTML=`
+ <div class="card"><div class="card-h"><div><h2>Relevé de vos envois</h2><p>${esc(P?.company_name||'')} · colis créés pendant la période choisie</p></div></div>
+  <div class="card-b stack" style="gap:12px">
+   <div class="chips">${pres.map(([k,l])=>`<button class="chip" data-pr="${k}">${l}</button>`).join('')}</div>
+   <div class="row wrap" style="gap:10px;align-items:end">
+    <div class="field" style="margin:0"><label for="prFrom">Du</label><input class="input" type="date" id="prFrom" value="${PR.from}"></div>
+    <div class="field" style="margin:0"><label for="prTo">Au</label><input class="input" type="date" id="prTo" value="${PR.to}"></div>
+    <div class="row wrap" style="gap:8px;margin-left:auto"><button class="btn" id="prCsv" ${r&&r.list.length?'':'disabled'}>Exporter en CSV</button><button class="btn" id="prPdf" ${r&&r.list.length?'':'disabled'}>Imprimer / PDF</button></div>
+   </div>
+   ${r?'':'<div class="errbox">'+ic('alert',16)+'<span>Choisissez une date de début antérieure à la date de fin.</span></div>'}
+  </div></div>
+ ${r?`<div class="kpis pkpis">
+  ${tile('Colis créés',r.st.crees,'prCrees')}${tile('Livrés',r.st.livres,'prLivres')}${tile('Non livrés',r.st.nonlivres,'prNonLivres')}${tile('Annulés',r.st.annules,'prAnnules')}
+  ${tile('Reportés',r.st.reportes,'prReportes')}${tile('Encore en cours',r.st.encours,'prEnCours')}${tile('Taux de réussite',r.st.taux==null?'–':r.st.taux+'<small> %</small>','prTaux')}
+  ${r.st.cod!=null?tile('Encaissé à la livraison',fcfa(r.st.cod),'prCod'):''}
+ </div>
+ <div class="card"><div class="card-h"><div><h2>Détail de la période</h2><p>${pDate(r.a)} – ${pDate(r.end)} · ${r.list.length} colis</p></div></div>
+  <div class="tbl-wrap"><table><thead><tr><th>N° de suivi</th><th>Créé le</th><th>Destinataire</th><th>Quartier</th><th>Statut</th><th>Livré le</th>${r.st.cod!=null?'<th>Montant</th>':''}</tr></thead>
+  <tbody>${r.list.map(c=>`<tr data-c="${c.code}"><td class="mono" style="font-weight:600">${c.code}</td><td class="small num">${pDateHm(c.createdAt)}</td><td>${esc(c.dest.nom)}</td><td>${esc(zoneLabel(c))}</td><td>${badge(c.statut)}</td><td class="small num">${c.statut==='livre'?pDateHm(pEndT(c)):''}</td>${r.st.cod!=null?`<td class="num">${c.cod?fcfa(c.cod):'–'}</td>`:''}</tr>`).join('')}</tbody></table>
+  ${r.list.length?'':`<div class="empty">${ic('box',26)}Aucun colis créé pendant cette période.</div>`}</div></div>`:''}`;
+ document.querySelectorAll('[data-pr]').forEach(b=>b.onclick=()=>{const k=b.dataset.pr,now=new Date(),t0=sod(Date.now());
+  if(k==='mois'){PR.from=isoDay(new Date(now.getFullYear(),now.getMonth(),1));PR.to=isoDay(Date.now())}
+  else if(k==='prec'){PR.from=isoDay(new Date(now.getFullYear(),now.getMonth()-1,1));PR.to=isoDay(new Date(now.getFullYear(),now.getMonth(),0))}
+  else{PR.from=isoDay(t0-(k==='7j'?6:29)*D);PR.to=isoDay(Date.now())}R.preleves()});
+ $('#prFrom').onchange=e=>{PR.from=e.target.value;R.preleves()};
+ $('#prTo').onchange=e=>{PR.to=e.target.value;R.preleves()};
+ const cv=$('#prCsv');if(cv)cv.onclick=()=>prCsv(prData());
+ const pd=$('#prPdf');if(pd)pd.onclick=()=>prPrint(prData());
+ document.querySelectorAll('#view tr[data-c]').forEach(t=>t.onclick=()=>openColis(t.dataset.c));
+};
+const csvCell=v=>{const s=String(v??'');return/[;"\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s};
+function prCsvText(r){
+ const head=['N° de suivi','Date de création','Destinataire','Téléphone','Quartier','Adresse / repère','Statut','Date de fin','Motif'];if(r.st.cod!=null)head.push('Montant (FCFA)');
+ const lines=r.list.map(c=>{const l=[c.code,pDateHm(c.createdAt),c.dest.nom,c.dest.tel,zoneLabel(c),c.adresse,ST[c.statut].l,P_FINAL.includes(c.statut)?pDateHm(pEndT(c)):'',c.statut==='livre'?'':(c.motif||'')];if(r.st.cod!=null)l.push(c.cod||0);return l.map(csvCell).join(';')});
+ return '﻿'+[head.map(csvCell).join(';'),...lines].join('\r\n')}
+function prCsv(r){
+ if(!r||!r.list.length)return;const P=PA(AUTH.partnerId);
+ const name=`releve-fast-express-${(P?.company_name||'partenaire').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')}-${isoDay(r.a)}-au-${isoDay(r.end)}.csv`;
+ const url=URL.createObjectURL(new Blob([prCsvText(r)],{type:'text/csv;charset=utf-8'}));
+ const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),4000);
+ toast('Relevé exporté au format CSV')}
+function prPrint(r){
+ if(!r||!r.list.length)return;const P=PA(AUTH.partnerId);
+ const w=window.open('','_blank');if(!w){toast('Autorisez les fenêtres pour imprimer le relevé','warn');return}
+ const kv=[['Colis créés',r.st.crees],['Livrés',r.st.livres],['Non livrés',r.st.nonlivres],['Annulés',r.st.annules],['Reportés',r.st.reportes],['Encore en cours',r.st.encours],['Taux de réussite',r.st.taux==null?'–':r.st.taux+' %']];
+ if(r.st.cod!=null)kv.push(['Encaissé à la livraison',fcfa(r.st.cod)]);
+ w.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Relevé FAST EXPRESS</title><style>
+  body{font-family:Arial,Helvetica,sans-serif;color:#12201b;margin:28px;font-size:12px}h1{font-size:20px;margin:0 0 4px}p{margin:0 0 14px;color:#4a5a54}
+  .k{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:0 0 18px}.k div{border:1px solid #cfd8d4;border-radius:6px;padding:8px}.k b{display:block;font-size:16px}
+  table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #dbe3df;padding:6px 4px;text-align:left}th{font-size:11px;text-transform:uppercase;color:#4a5a54}
+  .m{font-family:monospace}@media print{body{margin:12mm}}</style></head><body>
+  <h1>FAST EXPRESS — Relevé des envois</h1><p>${esc(P?.company_name||'')} · du ${pDate(r.a)} au ${pDate(r.end)} · édité le ${pDateHm(Date.now())}</p>
+  <div class="k">${kv.map(([l,v])=>`<div>${esc(l)}<b>${esc(String(v))}</b></div>`).join('')}</div>
+  <table><thead><tr><th>N° de suivi</th><th>Créé le</th><th>Destinataire</th><th>Quartier</th><th>Statut</th><th>Fin</th>${r.st.cod!=null?'<th>Montant</th>':''}</tr></thead><tbody>
+  ${r.list.map(c=>`<tr><td class="m">${c.code}</td><td>${pDateHm(c.createdAt)}</td><td>${esc(c.dest.nom)}</td><td>${esc(zoneLabel(c))}</td><td>${ST[c.statut].l}</td><td>${P_FINAL.includes(c.statut)?pDateHm(pEndT(c)):''}</td>${r.st.cod!=null?`<td>${c.cod?fcfa(c.cod):'–'}</td>`:''}</tr>`).join('')}
+  </tbody></table><script>window.onload=function(){setTimeout(function(){window.print()},250)}<\/script></body></html>`);
+ w.document.close()}
+
+/* ---------- Mon entreprise ---------- */
+const P_ADDR=MODE==='demo'||!!(CFG.optionalColumns&&CFG.optionalColumns.partners&&CFG.optionalColumns.partners.address);
+let pEdit=false,pBusy=false;
+R.pentreprise=()=>{
+ const P=PA(AUTH.partnerId);if(!P){$('#view').innerHTML=`<div class="card"><div class="empty">${ic('alert',26)}Fiche de l'entreprise introuvable. Contactez FAST EXPRESS.</div></div>`;return}
+ const mine=myParcels();
+ $('#view').innerHTML=`
+ <div class="grid dash-a">
+  <div class="card"><div class="card-h"><div><h2>${esc(P.company_name)}</h2><p>Informations de votre entreprise</p></div>${pEdit?'':`<button class="btn" id="peEdit">Modifier</button>`}</div>
+   <div class="card-b">
+   ${pEdit?`<div class="stack" style="gap:12px" id="peForm">
+     <div class="field"><label>Nom de l'entreprise</label><input class="input" value="${esc(P.company_name)}" disabled><p class="small muted" style="margin:4px 0 0">Le nom officiel est modifié uniquement par FAST EXPRESS.</p></div>
+     <div class="field"><label for="peContact">Nom du contact *</label><input class="input" id="peContact" value="${esc(P.contact_name||'')}" maxlength="80" autocomplete="name"></div>
+     <div class="field"><label for="pePhone">Téléphone *</label><input class="input" id="pePhone" value="${esc(P.contact_phone||'')}" maxlength="30" inputmode="tel" autocomplete="tel"></div>
+     ${P_ADDR?`<div class="field"><label for="peAddr">Adresse</label><input class="input" id="peAddr" value="${esc(P.address||'')}" maxlength="160" autocomplete="street-address"></div>`:''}
+     <div class="errbox" id="peErr" hidden></div>
+     <div class="row" style="gap:8px"><button class="btn pri" id="peSave">Enregistrer</button><button class="btn ghost" id="peCancel">Annuler</button></div>
+    </div>`
+   :`<dl class="kv">
+     <dt>Nom de l'entreprise</dt><dd><b>${esc(P.company_name)}</b></dd>
+     <dt>Contact</dt><dd id="peVContact">${esc(P.contact_name||'–')}</dd>
+     <dt>Téléphone</dt><dd class="num" id="peVPhone">${esc(P.contact_phone||'–')}</dd>
+     <dt>Adresse</dt><dd id="peVAddr">${P_ADDR?esc(P.address||'Non renseignée'):'<span class="faint">Non renseignée</span>'}</dd>
+     <dt>Compte connecté</dt><dd>${esc(AUTH.email||AUTH.name||'')}</dd>
+    </dl>
+    ${P_ADDR?'':'<p class="small muted" style="margin:10px 0 0">L\'adresse de l\'entreprise sera modifiable prochainement.</p>'}`}
+   </div></div>
+  <div class="card"><div class="card-h"><div><h2>Votre activité</h2><p>Depuis votre premier envoi</p></div></div><div class="card-b">
+   <dl class="kv"><dt>Colis confiés</dt><dd><b>${mine.length}</b></dd><dt>Livrés</dt><dd>${mine.filter(c=>c.statut==='livre').length}</dd><dt>Premier envoi</dt><dd>${mine.length?pDate(Math.min(...mine.map(c=>c.createdAt))):'–'}</dd></dl>
+   <div class="row wrap" style="gap:8px;margin-top:12px"><button class="btn sm" data-pgo="preleves">Mes relevés</button><button class="btn sm" data-pgo="phisto">Historique</button></div>
+  </div></div>
+ </div>`;
+ document.querySelectorAll('[data-pgo]').forEach(b=>b.onclick=()=>go(b.dataset.pgo));
+ const ed=$('#peEdit');if(ed)ed.onclick=()=>{pEdit=true;R.pentreprise();$('#peContact').focus()};
+ const ca=$('#peCancel');if(ca)ca.onclick=()=>{pEdit=false;R.pentreprise()};
+ const sv=$('#peSave');if(sv)sv.onclick=pSaveCompany;
+};
+async function pSaveCompany(){
+ if(pBusy)return;const P=PA(AUTH.partnerId);if(!P)return;const er=$('#peErr');
+ const fail=m=>{er.hidden=false;er.innerHTML=ic('alert',16)+`<span>${m}</span>`};
+ const patch={contact_name:$('#peContact').value.trim(),contact_phone:$('#pePhone').value.trim()};
+ if(P_ADDR&&$('#peAddr'))patch.address=$('#peAddr').value.trim();
+ if(patch.contact_name.length<2)return fail('Indiquez le nom du contact.');
+ if(patch.contact_phone.replace(/\D/g,'').length<8)return fail('Indiquez un numéro de téléphone valide (au moins 8 chiffres).');
+ pBusy=true;const bt=$('#peSave');bt.disabled=true;bt.textContent='Enregistrement…';
+ try{
+  if(MODE==='supabase')await window.FEDB.updatePartner(P.id,patch);
+  Object.assign(P,patch);S.colis.forEach(c=>{if(c.partnerId===P.id)c.exp.tel=P.contact_phone});save();
+  pEdit=false;R.pentreprise();toast('Informations de l\'entreprise enregistrées');
+ }catch(e){console.warn('[FAST EXPRESS] entreprise',e.message);bt.disabled=false;bt.textContent='Enregistrer';fail(esc(e.message||'Enregistrement impossible.'))}
+ finally{pBusy=false}
+}
 
 /* =========================================================
    Connexion (Supabase Auth, ou comptes de démonstration)

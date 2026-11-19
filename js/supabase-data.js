@@ -21,11 +21,13 @@
   const PC = (CFG.optionalColumns && CFG.optionalColumns.parcels) || {};
   const EC = (CFG.optionalColumns && CFG.optionalColumns.parcelEvents) || {};
   const EVT_CREATED = EC.createdAt || 'created_at';
+  const PTC = (CFG.optionalColumns && CFG.optionalColumns.partners) || {};
+  const P_ADDR_COL = PTC.address || null; // colonne d'adresse du partenaire, seulement si elle existe (voir 07)
 
   /* Colonnes lues et écrites (noms réels) */
   const COLS = {
     profiles: ['id', 'full_name', 'phone', 'role', 'is_active'],
-    partners: ['id', 'company_name', 'contact_name', 'contact_phone', 'profile_id'],
+    partners: ['id', 'company_name', 'contact_name', 'contact_phone', 'profile_id'].concat(P_ADDR_COL ? [P_ADDR_COL] : []),
     drivers: ['id', 'profile_id', 'vehicle_type', 'vehicle_plate', 'zone', 'is_on_duty', 'consent_at'],
     driver_locations: ['driver_id', 'lat', 'lng', 'accuracy', 'speed', 'heading', 'battery_level', 'is_charging', 'recorded_at', 'created_at'],
     parcels: ['id', 'tracking_number', 'tracking_token', 'confirmation_code', 'client_name', 'client_phone',
@@ -128,7 +130,8 @@
 
   /* ---------- Lecture et conversion vers le modèle de l'interface ---------- */
   function mapPartner(p) {
-    return { id: p.id, company_name: p.company_name || 'Partenaire', contact_name: p.contact_name || '', contact_phone: p.contact_phone || '', profileId: p.profile_id };
+    return { id: p.id, company_name: p.company_name || 'Partenaire', contact_name: p.contact_name || '', contact_phone: p.contact_phone || '', profileId: p.profile_id,
+      address: P_ADDR_COL ? (p[P_ADDR_COL] || '') : undefined };
   }
   function mapDriver(d, i, prof, loc) {
     const z = ZI[d.zone];
@@ -168,7 +171,7 @@
       adresse: row.delivery_address || '', type: (PC.parcelType && row[PC.parcelType]) || 'standard',
       poids: PC.weight ? row[PC.weight] : null, cod: PC.codAmount ? Number(row[PC.codAmount]) || 0 : 0,
       frais: PC.deliveryFee && row[PC.deliveryFee] != null ? Number(row[PC.deliveryFee]) : fraisCalc(p, 'standard', 0),
-      statut, livreurId: row.driver_id, createdAt, otp: row.confirmation_code != null ? String(row.confirmation_code) : '',
+      statut, livreurId: row.driver_id, createdAt, otp: row.confirmation_code != null ? String(row.confirmation_code).trim() : '',
       hist, motif, postponedDate: ts(row.postponed_date),
     };
     if (statut === 'reporte' && c.postponedDate) c.report = { creneau: creneauLabel(c.postponedDate), t: c.postponedDate };
@@ -225,7 +228,7 @@
     const lastLoc = {}; locRows.forEach((l) => { if (!lastLoc[l.driver_id]) lastLoc[l.driver_id] = l; });
     locSince = locRows.length ? locRows[0].created_at : null;
     const livreurs = drivers.map((d, i) => mapDriver(d, i, profs.find((p) => p.id === d.profile_id), lastLoc[d.id]));
-    const rows = await read('parcels', db.from('parcels').select(COLS.parcels.join(','))
+    const rows = await read('parcels', db.from('parcels').select(parcelCols())
       .order(PC.createdAt || 'tracking_number', { ascending: false }).limit(CFG.maxParcels || 500), 'Colis');
     const evs = await fetchEvents(rows.map((r) => r.id));
     const proofs = await signedProofs(rows);
@@ -250,10 +253,11 @@
   async function createParcel(c) {
     const g = toLL(c.x, c.y);
     const row = {
-      tracking_number: c.code, tracking_token: c.token, confirmation_code: c.otp,
+      tracking_number: c.code, tracking_token: c.token,
       client_name: c.dest.nom, client_phone: c.dest.tel, delivery_address: c.adresse,
       delivery_lat: g.lat, delivery_lng: g.lng, partner_id: c.partnerId, status: 'pending', driver_id: null,
     };
+    if (!CFG.deliveryCodeRpc) row.confirmation_code = c.otp;   // colonne protégée : code généré par la base
     if (PC.codAmount) row[PC.codAmount] = c.cod || 0;
     if (PC.deliveryFee) row[PC.deliveryFee] = c.frais;
     if (PC.parcelType) row[PC.parcelType] = c.type;
@@ -307,6 +311,33 @@
     });
     check(await client().from('driver_locations').insert(rows.length === 1 ? rows[0] : rows), 'Position GPS');
   }
+  /* Colonnes lues pour les colis. Le code de remise est lu pour le MANAGER (il le communique au client).
+     Quand la vérification est faite par le serveur (CFG.deliveryRpc), il n'est plus chargé chez le livreur
+     ni chez le partenaire. Sans fonction serveur, le livreur doit le charger pour la vérification
+     (jamais affiché) : limite de sécurité provisoire, voir supabase/05a_… à 06b_…. */
+  function parcelCols() {
+    // Colonne protégée (CFG.deliveryCodeRpc) : jamais lue, pour personne (le manager passe par getDeliveryCode).
+    const hide = CFG.deliveryCodeRpc || (CFG.deliveryRpc && !(me && me.role === 'manager'));
+    return (hide ? COLS.parcels.filter((c) => c !== 'confirmation_code') : COLS.parcels).join(',');
+  }
+  /* Code de remise d'un colis, pour le MANAGER uniquement (fonction serveur get_delivery_code) */
+  async function getDeliveryCode(c) {
+    if (!CFG.deliveryCodeRpc) throw new Error('Fonction serveur du code non configurée');
+    if (!c || !c.dbId) return null;
+    const data = check(await client().rpc(CFG.deliveryCodeRpc, { p_parcel_id: c.dbId }), 'Code de remise');
+    return data == null ? null : String(Array.isArray(data) ? data[0] : data);
+  }
+  /* Confirmation de livraison vérifiée par le serveur : renvoie { ok, error?, remaining? } */
+  async function confirmDelivery(c, code, opts) {
+    if (!CFG.deliveryRpc) throw new Error('Fonction serveur de confirmation non configurée');
+    if (!c || !c.dbId) throw new Error('Colis pas encore enregistré dans Supabase');
+    const o = opts || {};
+    const data = check(await client().rpc(CFG.deliveryRpc, { p_parcel_id: c.dbId, p_code: String(code),
+      p_lat: Number.isFinite(o.lat) ? o.lat : null, p_lng: Number.isFinite(o.lng) ? o.lng : null }), 'Confirmation de livraison');
+    const r = Array.isArray(data) ? data[0] : data;
+    if (!r || typeof r !== 'object' || typeof r.ok !== 'boolean') throw new Error('Réponse inattendue du serveur');
+    return r;
+  }
   const OPS = { createParcel, status, duty, consent, location };
   function run(op, target, extra) {
     const fn = OPS[op]; if (!fn) return Promise.reject(new Error('Opération inconnue : ' + op));
@@ -322,12 +353,7 @@
     channel = client().channel('fast-express-live')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'parcels' }, async (p) => {
         const row = p.new && p.new.id ? p.new : null; if (!row) { await loadAll(); return later(); }
-        const full = check(await client().from('parcels').select(COLS.parcels.join(',')).eq('id', row.id).maybeSingle(), 'Colis');
-        if (!full) { S.colis = S.colis.filter((c) => c.dbId !== row.id); return later(); }
-        const evs = await fetchEvents([full.id]); const proofs = await signedProofs([full]);
-        const c = mapParcel(full, evs[full.id], S.partners, proofs);
-        const i = S.colis.findIndex((x) => x.dbId === full.id || x.code === full.tracking_number);
-        if (i >= 0) { const old = S.colis[i]; if (old.preuve && old.preuve.img && c.preuve && !c.preuve.img) c.preuve.img = old.preuve.img; S.colis[i] = c; } else S.colis.unshift(c);
+        await refetchParcel(row.id);
         later();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'drivers' }, (p) => {
@@ -347,6 +373,34 @@
     const at = ts(r.recorded_at || r.created_at) || Date.now();
     if (l.posAt && at < l.posAt) return false;
     l.pos = toXY(r.lat, r.lng); l.posAt = at; return true;
+  }
+  /* Relit UN colis (ligne, étapes, preuve) et met à jour la liste ; le retire s'il n'est plus visible */
+  async function refetchParcel(id) {
+    const full = check(await client().from('parcels').select(parcelCols()).eq('id', id).maybeSingle(), 'Colis');
+    if (!full) { S.colis = S.colis.filter((c) => c.dbId !== id); return; }
+    const evs = await fetchEvents([full.id]); const proofs = await signedProofs([full]);
+    const c = mapParcel(full, evs[full.id], S.partners, proofs);
+    const i = S.colis.findIndex((x) => x.dbId === full.id || x.code === full.tracking_number);
+    if (i >= 0) { const old = S.colis[i]; if (old.preuve && old.preuve.img && c.preuve && !c.preuve.img) c.preuve.img = old.preuve.img; if (old._srvCode !== undefined && old.statut === c.statut) c._srvCode = old._srvCode; S.colis[i] = c; } else S.colis.unshift(c);
+  }
+  /* Relecture périodique des colis (utilisée quand la colonne du code est protégée, au cas où le temps
+     réel des colis ne serait plus transmis) : lecture légère des statuts, puis relecture complète
+     des seuls colis qui ont changé. Lecture seule. Renvoie true si quelque chose a changé. */
+  async function pollParcels() {
+    if (!me) return false;
+    const lim = CFG.maxParcels || 500;
+    const rows = check(await client().from('parcels').select('id,status,driver_id,postponed_date')
+      .order(PC.createdAt || 'tracking_number', { ascending: false }).limit(lim), 'Colis') || [];
+    let changed = false;
+    for (const r of rows) {
+      const c = S.colis.find((x) => x.dbId === r.id);
+      if (!c || c.statut !== appStatus(r) || (c.livreurId || null) !== (r.driver_id || null)) { await refetchParcel(r.id); changed = true; }
+    }
+    if (rows.length < lim) {                          // liste complète : un colis absent n'est plus visible
+      const ids = new Set(rows.map((r) => r.id)); const before = S.colis.length;
+      S.colis = S.colis.filter((c) => !c.dbId || ids.has(c.dbId)); if (S.colis.length !== before) changed = true;
+    }
+    return changed;
   }
   /* Relecture de sécurité (gestionnaire) : si le temps réel de la table driver_locations
      n'arrive pas, les nouvelles positions et les passages en service sont relus toutes les 30 s.
@@ -435,6 +489,20 @@
     return d;
   }
 
-  window.FEDB = { configured, signIn, signOut, restore, onAuth, loadAll, gpsJoin, gpsTrack, gpsRequest, gpsAck, gpsLeave, gpsState: () => gpsStatus, reload: loadAll, run, subscribe, unsubscribe, pollLive, track,
+  /* Fiche entreprise du partenaire : seuls le contact, le téléphone (et l'adresse si la colonne existe)
+     sont envoyés. Si les règles RLS refusent la modification, Supabase ne renvoie aucune ligne. */
+  async function updatePartner(id, patch) {
+    const row = {};
+    if (typeof patch.contact_name === 'string') row.contact_name = patch.contact_name;
+    if (typeof patch.contact_phone === 'string') row.contact_phone = patch.contact_phone;
+    if (P_ADDR_COL && typeof patch.address === 'string') row[P_ADDR_COL] = patch.address;
+    if (!Object.keys(row).length) throw new Error('Aucune information à enregistrer');
+    const { data, error } = await client().from('partners').update(row).eq('id', id).select('id');
+    if (error) throw new Error('Enregistrement refusé par Supabase : ' + (error.message || 'erreur inconnue'));
+    if (!data || !data.length) throw new Error("Modification non autorisée : votre compte ne peut pas encore modifier la fiche de l'entreprise. Contactez FAST EXPRESS pour la mettre à jour.");
+    return data[0];
+  }
+
+  window.FEDB = { configured, updatePartner, signIn, signOut, restore, onAuth, loadAll, gpsJoin, gpsTrack, gpsRequest, gpsAck, gpsLeave, gpsState: () => gpsStatus, reload: loadAll, run, subscribe, unsubscribe, pollLive, pollParcels, confirmDelivery, getDeliveryCode, track,
     _test: { appStatus, eventStatus, mapParcel, COLS } };
 })();
