@@ -52,6 +52,7 @@
     return res.data;
   }
   const frError = (m) => /invalid login/i.test(m) ? 'E-mail ou mot de passe incorrect.'
+    : /banned/i.test(m) ? 'Ce compte est désactivé. Contactez FAST EXPRESS.'
     : /email not confirmed/i.test(m) ? 'Adresse e-mail non confirmée.' : m;
   const ts = (v) => (v ? Date.parse(v) : null);
 
@@ -141,6 +142,7 @@
       vehicule: d.vehicle_type || 'Moto', plaque: d.vehicle_plate || '—', zone: d.zone || '', zones: secteur(d.zone),
       statut: d.is_on_duty ? 'disponible' : 'hors_service', consentAt: ts(d.consent_at), note: null,
       couleur: AVC[i % AVC.length], pos, posAt: loc ? ts(loc.recorded_at || loc.created_at) : null, depuis: '',
+      active: prof ? prof.is_active !== false : true,
     };
   }
   function authorName(ev) {
@@ -220,8 +222,10 @@
     const db = client();
     const partners = (await read('partners', db.from('partners').select(COLS.partners.join(',')), 'Partenaires')).map(mapPartner);
     const drivers = await read('drivers', db.from('drivers').select(COLS.drivers.join(',')), 'Livreurs');
-    const pids = [...new Set(drivers.map((d) => d.profile_id).filter(Boolean).concat(me ? [me.userId] : []))];
-    const profs = pids.length ? await read('profiles', db.from('profiles').select('id,full_name,phone').in('id', pids), 'Profils') : [];
+    const pids = [...new Set(drivers.map((d) => d.profile_id).concat(partners.map((p) => p.profileId)).filter(Boolean).concat(me ? [me.userId] : []))];
+    const profs = pids.length ? await read('profiles', db.from('profiles').select('id,full_name,phone,is_active').in('id', pids), 'Profils') : [];
+    // Compte désactivé (profiles.is_active = false) : visible pour le manager, exclu des attributions
+    partners.forEach((p) => { const pr = p.profileId && profs.find((x) => x.id === p.profileId); if (pr) p.active = pr.is_active !== false; });
     profs.forEach((p) => { names[p.id] = p.full_name; });
     const locRows = drivers.length ? await read('driver_locations', db.from('driver_locations').select(COLS.driver_locations.join(','))
       .in('driver_id', drivers.map((d) => d.id)).order('created_at', { ascending: false }).limit(Math.max(200, drivers.length * 10)), 'Positions') : [];
@@ -512,6 +516,46 @@
     return data[0];
   }
 
-  window.FEDB = { configured, updatePartner, signIn, signOut, restore, onAuth, loadAll, gpsJoin, gpsTrack, gpsRequest, gpsAck, gpsLeave, gpsState: () => gpsStatus, reload: loadAll, run, subscribe, unsubscribe, pollLive, pollParcels, confirmDelivery, getDeliveryCode, track,
+  /* Gestion des comptes (manager) : fonction serveur « admin-users » (CFG.adminFunction).
+     La clé service_role reste sur le serveur ; ici, seul le jeton de la personne connectée est envoyé. */
+  const ADMIN_ERR = {
+    non_connecte: 'Session expirée : reconnectez-vous.', reserve_au_manager: 'Action réservée à un manager actif.',
+    email_invalide: 'Adresse e-mail invalide.', email_deja_utilise: 'Cette adresse e-mail est déjà utilisée par un autre compte.',
+    telephone_invalide: 'Numéro de téléphone invalide (8 chiffres minimum).', nom_invalide: 'Nom invalide (2 caractères minimum).',
+    entreprise_invalide: "Nom d'entreprise invalide.", vehicule_invalide: 'Type de véhicule invalide.',
+    zone_invalide: 'Choisissez la zone principale du livreur.',
+    livreur_a_des_colis: 'Ce livreur transporte encore des colis : réaffectez-les avant de désactiver son compte.',
+    partenaire_a_deja_un_compte: 'Cette entreprise a déjà un compte de connexion.', role_incompatible: 'Ce compte ne peut pas être géré ici.',
+    pas_de_compte: "Cette fiche n'a pas de compte de connexion.", compte_introuvable: 'Compte introuvable.',
+    livreur_introuvable: 'Livreur introuvable.', partenaire_introuvable: 'Entreprise introuvable.',
+    configuration_serveur: 'La fonction serveur est mal configurée.',
+    identifiants_invalides: 'E-mail ou mot de passe incorrect.',
+    trop_de_tentatives: "Trop d'essais avec ce mot de passe provisoire : demandez-en un nouveau à FAST EXPRESS.",
+    compte_desactive: 'Ce compte est désactivé. Contactez FAST EXPRESS.',
+    mot_de_passe_faible: 'Mot de passe trop simple : 10 caractères minimum, avec des lettres et des chiffres.',
+    mot_de_passe_identique: 'Choisissez un mot de passe différent du mot de passe provisoire.',
+    changement_impossible: 'Changement de mot de passe impossible pour le moment. Réessayez.',
+  };
+  async function admin(action, payload) {
+    if (!CFG.adminFunction) throw new Error("La gestion des comptes n'est pas encore activée (fonction serveur non déployée).");
+    const { data, error } = await client().functions.invoke(CFG.adminFunction, { body: Object.assign({ action }, payload || {}) });
+    let body = data;
+    if (error) {
+      try { body = error.context && typeof error.context.json === 'function' ? await error.context.json() : null; } catch (e) { body = null; }
+      if (!body) throw new Error('Fonction serveur injoignable : ' + (error.message || 'erreur inconnue'));
+    }
+    if (!body || body.ok !== true) { const c = body && body.error; const e = new Error(ADMIN_ERR[c] || 'Action refusée par le serveur (' + (c || 'réponse inattendue') + ').'); e.code = c; throw e; }
+    return body;
+  }
+  /* Première connexion (SANS session) : le mot de passe provisoire n'ouvre jamais de session ;
+     le serveur le vérifie, impose le nouveau mot de passe puis débloque le compte.
+     Sans newPassword : vérification seule (affiche le formulaire). */
+  async function firstLogin(email, temp, newPassword) {
+    const p = { email, temp_password: temp };
+    if (newPassword != null) p.new_password = newPassword;
+    return admin('first_login', p);
+  }
+
+  window.FEDB = { configured, updatePartner, admin, firstLogin, signIn, signOut, restore, onAuth, loadAll, gpsJoin, gpsTrack, gpsRequest, gpsAck, gpsLeave, gpsState: () => gpsStatus, reload: loadAll, run, subscribe, unsubscribe, pollLive, pollParcels, confirmDelivery, getDeliveryCode, track,
     _test: { appStatus, eventStatus, mapParcel, COLS } };
 })();

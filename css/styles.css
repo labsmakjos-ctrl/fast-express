@@ -585,3 +585,4 @@ td .sub{display:block;color:var(--muted);font-size:12px}
 .kpis.pkpis .kpi{min-width:0}.kpis.pkpis .kpi .v{overflow-wrap:anywhere}
 @media (max-width:640px){.kpis.pkpis .kpi .v{font-size:22px}}
 .ps-gps{display:flex;gap:6px;align-items:center}
+.row-off td{opacity:.62}

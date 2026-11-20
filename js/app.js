@@ -298,6 +298,7 @@ const POIDS={charge:10,secteur:8,horsZone:20,km:1.5};
 const fmt1=n=>n.toFixed(1).replace('.',',');
 function evaluer(c,l){
  const load=charge(l)-(c.livreurId===l.id&&ACTIVE.includes(c.statut)?1:0),cap=capOf(l);
+ if(l.active===false)return{l,ok:false,load,cap,why:'Compte désactivé'};
  if(l.statut!=='disponible')return{l,ok:false,load,cap,why:LST[l.statut]?.l||'Indisponible'};
  if(load>=cap)return{l,ok:false,load,cap,why:`Capacité maximale atteinte (${load}/${cap})`};
  const z={x:c.x,y:c.y};
@@ -541,7 +542,7 @@ const canCreate=()=>!!AUTH&&isMgr();
 function newColisModal(){
  if(!canCreate()){toast('Seule l\'agence FAST EXPRESS peut enregistrer un nouveau colis','warn');return}
  const zo=ZONES.map(z=>`<option>${z.n}</option>`).join('');
- const partOpts=S.partners.map(p=>`<option value="${p.id}">${esc(p.company_name)}</option>`).join('');
+ const partOpts=S.partners.filter(p=>p.active!==false).map(p=>`<option value="${p.id}">${esc(p.company_name)}</option>`).join('');
  openModal(`<form id="ncF" novalidate>
  <div class="md-h"><div><h2>Nouveau colis</h2><p class="small muted" style="margin:2px 0 0">Enregistrement à l'agence de Glass</p></div><button type="button" class="x" id="mX" aria-label="Fermer">${ic('x')}</button></div>
  <div class="md-b">
@@ -628,31 +629,8 @@ function saveNewColis(){
   if(!persisted)toast('Stockage local indisponible : le colis restera visible jusqu\'à la fermeture de la page');
  }catch(err){console.error(err);savingColis=false;btn.disabled=false;btn.innerHTML=ic('plus',16)+'Enregistrer le colis';box.hidden=false;box.innerHTML=ic('alert',16)+'<span>L\'enregistrement a échoué. Réessayez.</span>'}
 }
-function newLivreurModal(){
- if(MODE==='supabase'){openModal(`<div class="md-h"><h2>Ajouter un livreur</h2><button type="button" class="x" id="mX" aria-label="Fermer">${ic('x')}</button></div>
-  <div class="md-b"><p style="margin:0">Pour des raisons de sécurité, un compte livreur se crée dans Supabase, pas depuis le navigateur (cela demande la clé secrète).</p>
-  <ol class="small" style="margin:0;padding-left:18px;line-height:1.7"><li>Supabase › <b>Authentication › Users › Add user</b> : e-mail et mot de passe du livreur.</li><li>Table <b>profiles</b> : une ligne avec l'identifiant de ce compte, <code>full_name</code>, <code>phone</code> et <code>role = driver</code>.</li><li>Table <b>drivers</b> : une ligne avec <code>profile_id</code>, <code>vehicle_type</code>, <code>vehicle_plate</code> et <code>zone</code>.</li></ol>
-  <p class="small muted" style="margin:0">Le livreur apparaît ensuite ici automatiquement.</p></div><div class="md-f"><button class="btn pri" type="button" id="mC">Compris</button></div>`);
-  $('#mX').onclick=$('#mC').onclick=closeAll;return}
- openModal(`<form id="nlF" novalidate>
- <div class="md-h"><h2>Ajouter un livreur</h2><button type="button" class="x" id="mX" aria-label="Fermer">${ic('x')}</button></div>
- <div class="md-b">
-  <div class="f2"><div class="field"><label for="nl1">Nom complet</label><input class="input" id="nl1" placeholder="Ex. Wilfried Biyogo"></div><div class="field"><label for="nl2">Téléphone</label><input class="input" id="nl2" placeholder="+241 074 00 00 00"></div></div>
-  <div class="f2"><div class="field"><label for="nl3">Type de véhicule</label><select class="select" id="nl3"><option>Moto</option><option>Scooter</option><option>Voiture</option><option>Vélo</option></select></div><div class="field"><label for="nl4">Immatriculation</label><input class="input" id="nl4" placeholder="EE-000-AA"></div></div>
-  <div class="field"><label for="nl5">Zone de travail principale</label><select class="select" id="nl5">${ZONES.map(z=>`<option>${z.n}</option>`).join('')}</select></div>
-  <p class="small muted" style="margin:0" id="nlSect"></p>
-  <div class="errbox" id="nlErr" hidden></div>
- </div>
- <div class="md-f"><button type="button" class="btn ghost" id="mC">Annuler</button><button class="btn pri" type="button" id="nlSave">${ic('plus',16)}Ajouter le livreur</button></div></form>`);
- $('#mX').onclick=$('#mC').onclick=closeAll;
- const sec=()=>{$('#nlSect').textContent=`Capacité : ${CAP_DEF($('#nl3').value)} colis actifs (selon le véhicule) · Secteur : `+secteur($('#nl5').value).join(', ')};$('#nl5').onchange=sec;$('#nl3').onchange=sec;sec();
- let nlBusy=false;bindForm($('#nlF'),$('#nlSave'),()=>{if(nlBusy)return;const nom=$('#nl1').value.trim(),t=$('#nl2').value.trim();
-  clearErrs($('#nlF'));if(nom.length<2||digits(t).length<8){if(nom.length<2)fieldErr('nl1','Indiquez le nom.');if(digits(t).length<8)fieldErr('nl2','8 chiffres minimum.');const er=$('#nlErr');er.hidden=false;er.innerHTML=ic('alert',16)+'<span>Indiquez le nom et un numéro de téléphone valide.</span>';return}nlBusy=true;
-  const z=ZI[$('#nl5').value];const i=S.livreurs.length;const uid='UD'+Date.now();const email=slug(nom)+'@fastexpress.demo';
-  S.users.push({id:uid,email,role:'driver',full_name:nom,phone:t});
-  const l={id:'L'+(i+1)+'-'+Date.now()%1000,profileId:uid,nom,tel:t,vehicule:$('#nl3').value,plaque:$('#nl4').value.trim().toUpperCase()||'EN COURS',zone:z.n,zones:secteur(z.n),statut:'disponible',consentAt:null,note:5,couleur:AVC[i%AVC.length],pos:{x:z.x,y:z.y},depuis:'nov. 2026'};
-  S.livreurs.push(l);log('livreur','',`Nouveau livreur : ${nom} (${z.n})`,me0());save();closeAll();toast(`${esc(nom)} a rejoint l'équipe · connexion : ${esc(email)} / ${esc(DEMO_PASSWORD)}`);refresh()});
-}
+/* « Ajouter un livreur » : crée désormais un vrai compte de connexion (Gestion des utilisateurs) */
+function newLivreurModal(){if(accOn())accCreateModal('driver');else{UF.tab='driver';UF.s='tous';go('utilisateurs')}}
 
 /* ---------- Navigation ---------- */
 const VIEWS=[
@@ -666,6 +644,8 @@ const VIEWS=[
  {g:'Communication'},
  {id:'whatsapp',l:'Notifications WhatsApp',i:'chat',sub:()=>'Messages automatiques envoyés aux destinataires',cnt:()=>Object.keys(S.wa).reduce((a,k)=>a+Math.max(0,S.wa[k].msgs.length-(S.read[k]||0)),0)},
  {id:'historique',l:'Historique',i:'clock',sub:()=>'Journal complet des événements'},
+ {g:'Administration'},
+ {id:'utilisateurs',l:'Gestion des utilisateurs',i:'users',sub:()=>'Comptes des livreurs et des partenaires'},
  {g:'Espaces'},
  {id:'livreur',l:'Espace livreur',i:'phone',sub:()=>'Application mobile des livreurs',demo:true},
  {id:'suivi',l:'Suivi public',i:'eye',sub:()=>'La page que consultent vos clients'}];
@@ -861,7 +841,7 @@ R.livreurs=()=>{
  $('#view').innerHTML=`
  <div class="toolbar"><div class="chips">${['tous',...Object.keys(LST)].map(k=>`<button class="chip ${livF===k?'on':''}" data-f="${k}">${k==='tous'?'Tous':LST[k].l}<b>${k==='tous'?S.livreurs.length:S.livreurs.filter(l=>l.statut===k).length}</b></button>`).join('')}</div><button class="btn pri" id="lNew" style="margin-left:auto">${ic('plus',16)}Ajouter un livreur</button></div>
  <div class="grid lgrid">${list.map(l=>{const m=S.colis.filter(c=>c.livreurId===l.id);const today=m.filter(c=>c.statut==='livre'&&c.hist.at(-1).t>=t0).length;const w=m.filter(c=>c.createdAt>=t0-6*D);const ok=w.filter(c=>c.statut==='livre').length,ko=w.filter(c=>c.statut==='echec').length;
-  return`<div class="card lcard"><div class="row">${av(l,44)}<div style="flex:1;min-width:0"><b style="font-size:15px">${esc(l.nom)}</b><div class="small muted num">${esc(l.tel)}</div></div>${l.note?`<span class="small" style="display:flex;gap:3px;align-items:center;color:var(--gold-ink);font-weight:700">${ic('star',14)}${String(l.note).replace('.',',')}</span>`:''}</div>
+  return`<div class="card lcard"><div class="row">${av(l,44)}<div style="flex:1;min-width:0"><b style="font-size:15px">${esc(l.nom)}</b>${l.active===false?' <span class="pill p-bad">Compte désactivé</span>':''}<div class="small muted num">${esc(l.tel)}</div></div>${l.note?`<span class="small" style="display:flex;gap:3px;align-items:center;color:var(--gold-ink);font-weight:700">${ic('star',14)}${String(l.note).replace('.',',')}</span>`:''}</div>
   <div class="row wrap small" style="gap:8px"><span>${esc(l.vehicule)}</span><span class="plate">${esc(l.plaque)}</span></div>
   <div class="small"><span class="muted">Zone principale :</span> <b>${esc(l.zone)}</b><div class="muted" style="margin-top:2px">Secteur : ${esc((l.zones||[]).filter(z=>z!==l.zone).join(', ')||'—')}</div></div>
   <div><div class="row between small"><span class="muted">Colis actifs</span><span class="row" style="gap:6px"><b class="num">${charge(l)}</b><span class="muted">/ ${capOf(l)} max (${vehicleKind(l.vehicule)})</span></span></div><div class="capbar"><i class="${charge(l)>=capOf(l)?'full':charge(l)/capOf(l)>=.75?'high':''}" style="width:${Math.min(100,charge(l)/capOf(l)*100)}%"></i></div></div>
@@ -869,7 +849,7 @@ R.livreurs=()=>{
   ${onDuty(l)?`<p class="small muted" style="margin:0">Position : ${esc(posState(l).d)}</p>`:`<p class="small muted" style="margin:0">Passe en service depuis son téléphone (position obligatoire).</p>`}
   ${reqHtml(l)}
   <div class="lstats"><div><b>${charge(l)}</b><span>en cours</span></div><div><b>${today}</b><span>livrés auj.</span></div><div><b>${ok+ko?Math.round(ok/(ok+ko)*100):'–'}${ok+ko?'<small style="font-size:12px"> %</small>':''}</b><span>réussite 7 j</span></div></div>
-  <div class="row">${MODE==='demo'?`<button class="btn sm" data-app="${l.id}" style="flex:1;justify-content:center">${ic('phone',14)}Ouvrir son espace</button>`:''}<button class="btn sm" data-map="${l.id}">${ic('map',14)}Carte</button></div></div>`}).join('')}</div>`;
+  <div class="row">${MODE==='demo'&&l.active!==false?`<button class="btn sm" data-app="${l.id}" style="flex:1;justify-content:center">${ic('phone',14)}Ouvrir son espace</button>`:''}<button class="btn sm" data-map="${l.id}">${ic('map',14)}Carte</button></div></div>`}).join('')}</div>`;
  document.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>{livF=b.dataset.f;R.livreurs()});
  document.querySelectorAll('[data-off]').forEach(b=>b.onclick=()=>{const l=LV(b.dataset.off);if(!l||!onDuty(l))return;l.statut='hors_service';log('livreur','',`${l.nom} mis hors service par l'agence`,me0());save();remote('duty',l);toast(`${esc(l.nom)} est maintenant hors service · son partage de position s'arrête`);refresh()});
  bindReq();
@@ -1963,6 +1943,245 @@ async function pSaveCompany(){
    Connexion (Supabase Auth, ou comptes de démonstration)
    ========================================================= */
 const SKEY='fastexpress-app-session';
+/* =========================================================
+   GESTION DES UTILISATEURS (manager uniquement)
+   Livreurs et partenaires : création du compte de connexion, modification,
+   désactivation / réactivation, mot de passe provisoire.
+   Supabase : TOUT passe par la fonction serveur « admin-users » (CFG.adminFunction),
+   qui vérifie le rôle manager et détient seule la clé service_role.
+   Démo : comptes simulés dans le navigateur.
+   Aucun compte manager n'est listé ni modifiable ici ; aucune donnée n'est supprimée.
+   ========================================================= */
+let UF={tab:'driver',q:'',s:'tous'};
+const ACC={map:{},at:0,loading:false,err:''};
+const accOn=()=>MODE==='demo'||!!CFG.adminFunction;
+const VEH_TYPES=['Moto','Scooter','Voiture','Vélo','Tricycle'];
+const accUser=pid=>pid?S.users.find(u=>u.id===pid):null;
+/* Informations du compte de connexion (jamais de mot de passe) */
+function accInfo(pid){
+ if(!pid)return null;
+ if(MODE==='demo'){const u=accUser(pid);return u?{email:u.email,mustChange:!!u.mustChange,lastLogin:u.lastLogin||null}:null}
+ const a=ACC.map[pid];return a?{email:a.email,mustChange:!!a.must_change_password,locked:!!a.locked,lastLogin:a.last_sign_in_at?Date.parse(a.last_sign_in_at):null,blocked:!!a.blocked}:null}
+async function accLoad(force){
+ if(MODE!=='supabase'||!CFG.adminFunction||ACC.loading)return;
+ if(!force&&Date.now()-ACC.at<60000)return;
+ ACC.loading=true;ACC.err='';
+ try{const r=await window.FEDB.admin('list');ACC.map={};(r.accounts||[]).forEach(a=>{ACC.map[a.id]=a});ACC.at=Date.now()}
+ catch(e){ACC.err=e.message||'Liste des comptes indisponible'}
+ finally{ACC.loading=false;if(cur==='utilisateurs'&&!modal.classList.contains('on'))R.utilisateurs()}}
+/* Mot de passe provisoire (démo ; en Supabase il est généré par le serveur) */
+function tempPass(){const A='ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';const a=new Uint32Array(12);crypto.getRandomValues(a);
+ const s=[...a].map(x=>A[x%A.length]).join('');return/\d/.test(s)&&/[A-Z]/.test(s)&&/[a-z]/.test(s)?s:tempPass()}
+const mailOk=m=>/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(m);
+const activeParcels=l=>S.colis.filter(c=>c.livreurId===l.id&&ACTIVE.includes(c.statut)).length;
+
+/* ---------- Liste ---------- */
+R.utilisateurs=()=>{
+ if(!isMgr()){go('tableau');return}
+ accLoad(false);
+ const drv=UF.tab==='driver';const q=UF.q.toLowerCase();
+ const rows=drv?S.livreurs.map(l=>{const a=accInfo(l.profileId);return{k:'driver',id:l.id,pid:l.profileId,name:l.nom,tel:l.tel,email:a&&a.email,a,active:l.active!==false,duty:onDuty(l),extra:`${l.vehicule}${l.plaque&&l.plaque!=='—'?' · '+l.plaque:''}`,zone:l.zone||'',n:activeParcels(l),o:l}})
+  :S.partners.map(p=>{const a=accInfo(p.profileId);return{k:'partner',id:p.id,pid:p.profileId,name:p.company_name,contact:p.contact_name,tel:p.contact_phone,email:a&&a.email,a,active:p.active!==false,noAcc:!p.profileId,comptoir:p.company_name===COMPTOIR_NAME,n:S.colis.filter(c=>c.partnerId===p.id).length,o:p}});
+ const match=r=>!q||[r.name,r.contact,r.tel,r.email,r.extra,r.zone].join(' ').toLowerCase().includes(q);
+ const st=r=>UF.s==='tous'||(UF.s==='actifs'&&r.active&&!r.noAcc)||(UF.s==='desactives'&&!r.active)||(UF.s==='service'&&r.duty&&r.active)||(UF.s==='hors'&&!r.duty&&r.active)||(UF.s==='sans'&&r.noAcc);
+ const base=rows.filter(match);const list=base.filter(st).sort((a,b)=>(b.active-a.active)||a.name.localeCompare(b.name,'fr'));
+ const chips=drv?[['tous','Tous'],['actifs','Actifs'],['service','En service'],['hors','Hors service'],['desactives','Désactivés']]:[['tous','Tous'],['actifs','Actifs'],['sans','Sans compte'],['desactives','Désactivés']];
+ const save0=UF.s;const cnt=k=>{UF.s=k;const n=base.filter(st).length;UF.s=save0;return n};
+ const accPill=r=>r.noAcc?'<span class="pill p-neutral">Sans compte</span>':r.active?'<span class="pill p-ok">Actif</span>':'<span class="pill p-bad">Désactivé</span>';
+ const mailCell=r=>r.noAcc?'<span class="faint">—</span>':r.email?`<span class="small">${esc(r.email)}</span>${r.a&&r.a.mustChange?`<span class="sub" style="color:var(--warn)">${r.a.locked?'Bloqué : trop d\'essais':'Première connexion en attente'}</span>`:''}`
+  :`<span class="faint small">${MODE==='supabase'?(ACC.loading?'Chargement…':accOn()?'Indisponible':'Visible dans Supabase'):'—'}</span>`;
+ const acts=r=>{if(!accOn())return'';if(r.comptoir)return'<span class="faint small">Compte interne</span>';
+  if(r.noAcc)return`<button class="btn sm" data-ua="login" data-id="${esc(r.id)}">Créer l'accès</button><button class="btn sm ghost" data-ua="edit" data-id="${esc(r.id)}">Modifier</button>`;
+  return`<button class="btn sm ghost" data-ua="edit" data-id="${esc(r.id)}">Modifier</button>${r.active?`<button class="btn sm ghost" data-ua="pw" data-id="${esc(r.id)}" title="Créer un nouveau mot de passe provisoire">Mot de passe</button><button class="btn sm danger" data-ua="off" data-id="${esc(r.id)}">Désactiver</button>`:`<button class="btn sm" data-ua="on" data-id="${esc(r.id)}">Réactiver</button>`}`};
+ $('#view').innerHTML=`
+ ${MODE==='supabase'&&!accOn()?`<div class="banner" style="background:var(--warn-soft);color:var(--warn)">${ic('alert',16)}<span><b>Lecture seule.</b> La création et la modification des comptes passent par une fonction serveur sécurisée qui n'est pas encore activée (voir supabase/09_gestion_utilisateurs.md).</span></div>`:''}
+ ${ACC.err?`<div class="banner" style="background:var(--bad-soft);color:var(--bad)">${ic('alert',16)}<span>${esc(ACC.err)}</span></div>`:''}
+ <div class="toolbar">
+  <div class="chips" id="uTab"><button class="chip ${drv?'on':''}" data-t="driver">Livreurs<b>${S.livreurs.length}</b></button><button class="chip ${drv?'':'on'}" data-t="partner">Partenaires<b>${S.partners.length}</b></button></div>
+  <div class="search">${ic('search',16)}<input class="input" id="uQ" placeholder="${drv?'Nom, téléphone, e-mail, véhicule, zone…':'Entreprise, responsable, téléphone, e-mail…'}" value="${esc(UF.q)}" aria-label="Rechercher un compte"></div>
+  ${accOn()?`<button class="btn pri" id="uNew" style="margin-left:auto">${ic('plus',16)}${drv?'Nouveau livreur':'Nouveau partenaire'}</button>`:''}
+ </div>
+ <div class="chips" id="uS">${chips.map(([k,l])=>`<button class="chip ${UF.s===k?'on':''}" data-s="${k}">${l}<b>${cnt(k)}</b></button>`).join('')}</div>
+ <div class="card"><div class="tbl-wrap"><table>
+  <thead><tr>${drv?'<th>Livreur</th><th>E-mail de connexion</th><th>Véhicule · zone</th><th>Compte</th><th>Service</th><th></th>':'<th>Entreprise</th><th>Responsable</th><th>E-mail de connexion</th><th>Compte</th><th>Colis</th><th></th>'}</tr></thead>
+  <tbody>${list.map(r=>drv?`<tr data-uid="${esc(r.id)}" class="${r.active?'':'row-off'}"><td><b>${esc(r.name)}</b><span class="sub num">${esc(r.tel)}</span></td><td>${mailCell(r)}</td><td class="small">${esc(r.extra)}<span class="sub">${esc(r.zone||'—')}</span></td><td>${accPill(r)}</td><td>${r.active?(r.duty?'<span class="pill p-ok">En service</span>':'<span class="pill p-neutral">Hors service</span>'):'<span class="faint small">—</span>'}${r.n?`<span class="sub">${r.n} colis en cours</span>`:''}</td><td><div class="row wrap" style="gap:6px;justify-content:flex-end">${acts(r)}</div></td></tr>`
+   :`<tr data-uid="${esc(r.id)}" class="${r.active?'':'row-off'}"><td><b>${esc(r.name)}</b></td><td>${esc(r.contact||'')}<span class="sub num">${esc(r.tel||'')}</span></td><td>${mailCell(r)}</td><td>${accPill(r)}</td><td class="num">${r.n}</td><td><div class="row wrap" style="gap:6px;justify-content:flex-end">${acts(r)}</div></td></tr>`).join('')}</tbody></table>
+  ${list.length?'':`<div class="empty">${ic('users',26)}Aucun compte ne correspond à ces critères.</div>`}
+ </div></div>
+ <p class="small muted" style="margin:0">Les comptes managers ne sont pas gérés ici. Désactiver un compte bloque sa connexion sans supprimer ses colis ni son historique.</p>`;
+ document.querySelectorAll('#uTab [data-t]').forEach(b=>b.onclick=()=>{UF.tab=b.dataset.t;UF.s='tous';R.utilisateurs()});
+ document.querySelectorAll('#uS [data-s]').forEach(b=>b.onclick=()=>{UF.s=b.dataset.s;R.utilisateurs()});
+ const qi=$('#uQ');qi.oninput=e=>{UF.q=e.target.value;const p=e.target.selectionStart;R.utilisateurs();const n=$('#uQ');n.focus();n.setSelectionRange(p,p)};
+ const nb=$('#uNew');if(nb)nb.onclick=()=>accCreateModal(UF.tab);
+ document.querySelectorAll('[data-ua]').forEach(b=>b.onclick=()=>{const k=UF.tab,id=b.dataset.id,a=b.dataset.ua;
+  if(a==='edit')accEditModal(k,id);else if(a==='login')accCreateModal('partner',id);else if(a==='pw')accConfirm(k,id,'pw');else accConfirm(k,id,a)});
+};
+
+/* ---------- Formulaires ---------- */
+function accField(id,label,val,attrs=''){return`<div class="field"><label for="${id}">${label}</label><input class="input" id="${id}" value="${esc(val||'')}" ${attrs}></div>`}
+function vehParts(v){const s=String(v||'').trim();const t=VEH_TYPES.find(x=>s.toLowerCase().startsWith(x.toLowerCase()));return t?{t,m:s.slice(t.length).trim()}:{t:'Moto',m:s}}
+function accFormHtml(kind,o,forLogin){
+ if(kind==='driver'){const vp=vehParts(o&&o.vehicule);return`
+  <div class="f2">${accField('uf1','Nom complet *',o&&o.nom,'maxlength="80" autocomplete="off"')}${accField('uf2','Téléphone *',o&&o.tel,'maxlength="30" inputmode="tel" autocomplete="off"')}</div>
+  ${accField('uf3','Adresse e-mail de connexion *',o&&o.email,'type="email" maxlength="160" autocomplete="off" inputmode="email"')}
+  <div class="f2"><div class="field"><label for="uf4">Véhicule *</label><select class="select" id="uf4">${VEH_TYPES.map(t=>`<option ${vp.t===t?'selected':''}>${t}</option>`).join('')}</select></div>${accField('uf5','Modèle',vp.m,'maxlength="30" placeholder="Ex. Yamaha Crypton"')}</div>
+  <div class="f2">${accField('uf6','Immatriculation',o&&o.plaque&&o.plaque!=='—'&&o.plaque!=='EN COURS'?o.plaque:'','maxlength="20"')}<div class="field"><label for="uf7">Zone principale</label><select class="select" id="uf7">${ZONES.map(z=>`<option ${o&&o.zone===z.n?'selected':''}>${z.n}</option>`).join('')}</select></div></div>`}
+ return`${accField('uf1',"Nom de l'entreprise *",o&&o.company_name,`maxlength="100" ${forLogin?'disabled':''}`)}
+  <div class="f2">${accField('uf2','Responsable *',o&&o.contact_name,'maxlength="80" autocomplete="off"')}${accField('uf3','Téléphone *',o&&o.contact_phone,'maxlength="30" inputmode="tel" autocomplete="off"')}</div>
+  ${accField('uf4','Adresse e-mail de connexion *',o&&o.email,'type="email" maxlength="160" autocomplete="off" inputmode="email"')}`}
+function accRead(kind){const v=id=>($('#'+id)?.value||'').trim().replace(/\s+/g,' ');
+ if(kind==='driver'){const veh=(v('uf4')+' '+v('uf5')).trim();return{full_name:v('uf1'),phone:v('uf2'),email:v('uf3').toLowerCase(),vehicle_type:veh,vehicle_plate:v('uf6').toUpperCase()||null,zone:v('uf7')||null}}
+ return{company_name:v('uf1'),contact_name:v('uf2'),contact_phone:v('uf3'),email:v('uf4').toLowerCase()}}
+function accValidate(kind,d,needMail){const e=[];
+ const nm=kind==='driver'?['uf1',d.full_name]:['uf2',d.contact_name];if(nm[1].length<2)e.push([nm[0],'Indiquez le nom (2 caractères minimum).']);
+ const tl=kind==='driver'?['uf2',d.phone]:['uf3',d.contact_phone];if(digits(tl[1]).length<8)e.push([tl[0],'8 chiffres minimum.']);
+ const ml=kind==='driver'?'uf3':'uf4';if((needMail||d.email)&&!mailOk(d.email))e.push([ml,'Adresse e-mail invalide.']);
+ if(kind==='partner'&&d.company_name.length<2)e.push(['uf1',"Indiquez le nom de l'entreprise."]);
+ if(kind==='driver'&&!d.vehicle_type)e.push(['uf4','Choisissez un véhicule.']);
+ return e}
+const mailTaken=(m,exceptPid)=>MODE==='demo'&&S.users.some(u=>u.email.toLowerCase()===m&&u.id!==exceptPid);
+
+/* Création (livreur, partenaire, ou accès pour une entreprise existante sans compte) */
+function accCreateModal(kind,partnerId){
+ if(!isMgr()||!accOn())return;
+ const P=partnerId?PA(partnerId):null;if(partnerId&&(!P||P.profileId))return toast('Cette entreprise a déjà un compte','warn');
+ const title=P?`Créer l'accès de ${P.company_name}`:kind==='driver'?'Nouveau livreur':'Nouveau partenaire';
+ openModal(`<form id="ufF" novalidate><div class="md-h"><div><h2>${esc(title)}</h2><p class="small muted" style="margin:2px 0 0">Un compte de connexion ${kind==='driver'?'livreur':'partenaire'} est créé avec un mot de passe provisoire.</p></div><button type="button" class="x" id="mX" aria-label="Fermer">${ic('x')}</button></div>
+ <div class="md-b">${accFormHtml(kind,P,!!P)}
+  ${kind==='driver'?'<p class="small muted" style="margin:0" id="ufSect"></p>':''}
+  <p class="small muted" style="margin:0">Le mot de passe provisoire s'affichera une seule fois. À sa première connexion, la personne devra choisir son propre mot de passe.</p>
+  <div class="errbox" id="ufErr" hidden></div></div>
+ <div class="md-f"><button type="button" class="btn ghost" id="mC">Annuler</button><button class="btn pri" type="button" id="ufSave">${ic('plus',16)}Créer le compte</button></div></form>`);
+ $('#mX').onclick=$('#mC').onclick=closeAll;
+ if(kind==='driver'){const sec=()=>{$('#ufSect').textContent=`Capacité : ${CAP_DEF($('#uf4').value)} colis actifs · Secteur : `+secteur($('#uf7').value).join(', ')};$('#uf4').onchange=$('#uf7').onchange=sec;sec()}
+ let busy=false;bindForm($('#ufF'),$('#ufSave'),async()=>{
+  if(busy)return;const f=$('#ufF');clearErrs(f);const er=$('#ufErr');er.hidden=true;
+  const d=accRead(kind);if(P)d.company_name=P.company_name;const errs=accValidate(kind,d,true);
+  if(!errs.length&&mailTaken(d.email))errs.push([kind==='driver'?'uf3':'uf4','Cette adresse e-mail est déjà utilisée.']);
+  if(errs.length){errs.forEach(([i,m])=>fieldErr(i,m));er.hidden=false;er.innerHTML=ic('alert',16)+'<span>Corrigez les champs indiqués.</span>';return}
+  busy=true;const bt=$('#ufSave');bt.disabled=true;bt.textContent='Création…';
+  try{const r=P?await accDo('create_partner_login',{partner_id:P.id,email:d.email,contact_name:d.contact_name,contact_phone:d.contact_phone}):await accDo(kind==='driver'?'create_driver':'create_partner',d);
+   const name=kind==='driver'?d.full_name:(P?P.company_name:d.company_name);
+   log('livreur','',`Compte ${kind==='driver'?'livreur':'partenaire'} créé : ${name}`,me0());save();
+   accPwModal(`Compte créé : ${name}`,r.email||d.email,r.temp_password)}
+  catch(e){busy=false;bt.disabled=false;bt.innerHTML=ic('plus',16)+'Créer le compte';er.hidden=false;er.innerHTML=ic('alert',16)+`<span>${esc(e.message||'Création impossible.')}</span>`}});
+}
+function accEditModal(kind,id){
+ const o=kind==='driver'?LV(id):PA(id);if(!o||!isMgr()||!accOn())return;
+ const a=accInfo(o.profileId);const v=kind==='driver'?Object.assign({},o,{email:a&&a.email}):Object.assign({},o,{email:a&&a.email});
+ openModal(`<form id="ufF" novalidate><div class="md-h"><div><h2>Modifier ${esc(kind==='driver'?o.nom:o.company_name)}</h2><p class="small muted" style="margin:2px 0 0">Le rôle du compte ne peut pas être modifié.</p></div><button type="button" class="x" id="mX" aria-label="Fermer">${ic('x')}</button></div>
+ <div class="md-b">${accFormHtml(kind,v,false)}${o.profileId?'':'<p class="small muted" style="margin:0">Cette entreprise n\'a pas encore de compte : l\'e-mail sera utilisé à la création de son accès.</p>'}<div class="errbox" id="ufErr" hidden></div></div>
+ <div class="md-f"><button type="button" class="btn ghost" id="mC">Annuler</button><button class="btn pri" type="button" id="ufSave">Enregistrer</button></div></form>`);
+ if(!o.profileId){const m=$('#uf4');if(m)m.closest('.field').remove()}
+ $('#mX').onclick=$('#mC').onclick=closeAll;
+ let busy=false;bindForm($('#ufF'),$('#ufSave'),async()=>{
+  if(busy)return;const f=$('#ufF');clearErrs(f);const er=$('#ufErr');er.hidden=true;
+  const d=accRead(kind);if(!o.profileId)d.email='';if(a&&d.email===String(a.email||'').toLowerCase())d.email='';
+  const errs=accValidate(kind,d,false);if(!errs.length&&d.email&&mailTaken(d.email,o.profileId))errs.push([kind==='driver'?'uf3':'uf4','Cette adresse e-mail est déjà utilisée.']);
+  if(errs.length){errs.forEach(([i,m])=>fieldErr(i,m));er.hidden=false;er.innerHTML=ic('alert',16)+'<span>Corrigez les champs indiqués.</span>';return}
+  busy=true;const bt=$('#ufSave');bt.disabled=true;bt.textContent='Enregistrement…';
+  try{await accDo(kind==='driver'?'update_driver':'update_partner',Object.assign(kind==='driver'?{driver_id:id}:{partner_id:id},d,d.email?{}:{email:null}));
+   log('livreur','',`Compte modifié : ${kind==='driver'?d.full_name:d.company_name}`,me0());save();closeAll();toast('Informations enregistrées');refresh()}
+  catch(e){busy=false;bt.disabled=false;bt.textContent='Enregistrer';er.hidden=false;er.innerHTML=ic('alert',16)+`<span>${esc(e.message||'Enregistrement impossible.')}</span>`}});
+}
+/* Désactivation, réactivation, nouveau mot de passe provisoire : confirmation explicite */
+function accConfirm(kind,id,what){
+ const o=kind==='driver'?LV(id):PA(id);if(!o||!isMgr()||!accOn())return;const name=kind==='driver'?o.nom:o.company_name;
+ if(what==='off'&&kind==='driver'&&activeParcels(o))return toast(`${esc(name)} transporte encore ${activeParcels(o)} colis : réaffectez-les avant de désactiver son compte`,'warn');
+ const T={off:['Désactiver le compte',`${name} ne pourra plus se connecter. Ses colis, son historique et ses informations sont conservés ; le compte pourra être réactivé.`,'Désactiver','danger'],
+  on:['Réactiver le compte',`${name} pourra de nouveau se connecter avec son mot de passe actuel.`,'Réactiver','pri'],
+  pw:['Nouveau mot de passe provisoire',`L'ancien mot de passe de ${name} ne fonctionnera plus. Un mot de passe provisoire va être créé ; il devra être changé à la première connexion.`,'Créer le mot de passe','pri']}[what];
+ openModal(`<div class="md-h"><h2>${T[0]}</h2><button type="button" class="x" id="mX" aria-label="Fermer">${ic('x')}</button></div>
+ <div class="md-b"><p style="margin:0">${esc(T[1])}</p><div class="errbox" id="ufErr" hidden></div></div>
+ <div class="md-f"><button type="button" class="btn ghost" id="mC">Annuler</button><button class="btn ${T[3]}" type="button" id="ufOk">${T[2]}</button></div>`);
+ $('#mX').onclick=$('#mC').onclick=closeAll;
+ let busy=false;$('#ufOk').onclick=async()=>{if(busy)return;busy=true;const bt=$('#ufOk');bt.disabled=true;
+  try{if(what==='pw'){const r=await accDo('reset_password',{kind,id});log('livreur','',`Mot de passe provisoire recréé : ${name}`,me0());save();accPwModal(`Nouveau mot de passe provisoire : ${name}`,accInfo(o.profileId)?.email,r.temp_password);return}
+   await accDo('set_active',{kind,id,active:what==='on'});log('livreur','',`Compte ${what==='on'?'réactivé':'désactivé'} : ${name}`,me0());save();closeAll();toast(`Compte ${what==='on'?'réactivé':'désactivé'} : ${esc(name)}`);refresh()}
+  catch(e){busy=false;bt.disabled=false;const er=$('#ufErr');er.hidden=false;er.innerHTML=ic('alert',16)+`<span>${esc(e.message||'Action impossible.')}</span>`}};
+}
+/* Mot de passe provisoire : affiché UNE fois, jamais enregistré dans la page */
+function accPwModal(title,mail,pw){
+ openModal(`<div class="md-h"><h2>${esc(title)}</h2><button type="button" class="x" id="mX" aria-label="Fermer">${ic('x')}</button></div>
+ <div class="md-b stack" style="gap:12px">
+  <div class="box"><h3>Identifiants de première connexion</h3><dl class="kv"><dt>E-mail</dt><dd class="mono" id="upMail">${esc(mail||'')}</dd><dt>Mot de passe provisoire</dt><dd><b class="mono" id="upPw" style="font-size:18px;letter-spacing:.04em">${esc(pw||'')}</b></dd></dl></div>
+  <p class="small" style="margin:0"><b>Notez-le maintenant : il ne sera plus jamais affiché.</b> Communiquez-le en personne ou par téléphone, pas dans un groupe de discussion. À la première connexion, la personne devra choisir son propre mot de passe.</p>
+ </div>
+ <div class="md-f"><button class="btn" type="button" id="upCopy">Copier le mot de passe</button><button class="btn pri" type="button" id="upDone">C'est noté</button></div>`);
+ const done=()=>{closeAll();modal.innerHTML='';refresh()};$('#mX').onclick=$('#upDone').onclick=done;   // effacé de la page à la fermeture
+ $('#upCopy').onclick=()=>copyText(pw,'Mot de passe provisoire copié');
+}
+
+/* ---------- Exécution : serveur (Supabase) ou simulation locale (démo) ---------- */
+async function accDo(action,p){
+ if(!isMgr())throw new Error('Action réservée au manager.');
+ if(MODE==='supabase'){const r=await window.FEDB.admin(action,p);await window.FEDB.reload();ACC.at=0;await accLoad(true);return r}
+ return accDemo(action,p)}
+function accDemo(action,p){
+ const pw=()=>tempPass();
+ if(action==='create_driver'){if(mailTaken(p.email))throw new Error('Cette adresse e-mail est déjà utilisée par un autre compte.');
+  const z=ZI[p.zone]||ZI.Glass;const uid='UD'+Date.now();const t=pw();const i=S.livreurs.length;
+  S.users.push({id:uid,email:p.email,role:'driver',full_name:p.full_name,phone:p.phone,active:true,pass:t,mustChange:true});
+  S.livreurs.push({id:'L'+(i+1)+'-'+Date.now()%1000,profileId:uid,nom:p.full_name,tel:p.phone,vehicule:p.vehicle_type,plaque:p.vehicle_plate||'—',zone:z.n,zones:secteur(z.n),statut:'hors_service',active:true,consentAt:null,note:null,couleur:AVC[i%AVC.length],pos:{x:z.x,y:z.y},posAt:null,depuis:''});
+  save();return{email:p.email,temp_password:t}}
+ if(action==='create_partner'||action==='create_partner_login'){if(mailTaken(p.email))throw new Error('Cette adresse e-mail est déjà utilisée par un autre compte.');
+  const uid='UP'+Date.now();const t=pw();let P;
+  if(action==='create_partner_login'){P=PA(p.partner_id);if(!P||P.profileId)throw new Error('Cette entreprise a déjà un compte de connexion.');Object.assign(P,{profileId:uid,contact_name:p.contact_name,contact_phone:p.contact_phone,active:true})}
+  else{P={id:'P'+Date.now(),company_name:p.company_name,contact_name:p.contact_name,contact_phone:p.contact_phone,profileId:uid,active:true};S.partners.push(P)}
+  S.users.push({id:uid,email:p.email,role:'partner',full_name:p.contact_name,phone:p.contact_phone,active:true,pass:t,mustChange:true});
+  save();return{email:p.email,temp_password:t}}
+ if(action==='update_driver'){const l=LV(p.driver_id);if(!l)throw new Error('Livreur introuvable.');const u=accUser(l.profileId);
+  if(p.email&&mailTaken(p.email,l.profileId))throw new Error('Cette adresse e-mail est déjà utilisée par un autre compte.');
+  const z=p.zone&&ZI[p.zone];Object.assign(l,{nom:p.full_name,tel:p.phone,vehicule:p.vehicle_type,plaque:p.vehicle_plate||'—'});if(z){l.zone=z.n;l.zones=secteur(z.n)}
+  if(u){u.full_name=p.full_name;u.phone=p.phone;if(p.email)u.email=p.email}save();return{ok:true}}
+ if(action==='update_partner'){const P=PA(p.partner_id);if(!P)throw new Error('Entreprise introuvable.');const u=accUser(P.profileId);
+  if(p.email&&mailTaken(p.email,P.profileId))throw new Error('Cette adresse e-mail est déjà utilisée par un autre compte.');
+  Object.assign(P,{company_name:p.company_name,contact_name:p.contact_name,contact_phone:p.contact_phone});S.colis.forEach(c=>{if(c.partnerId===P.id){c.exp.nom=P.company_name;c.exp.tel=P.contact_phone}});
+  if(u){u.full_name=p.contact_name;u.phone=p.contact_phone;if(p.email)u.email=p.email}save();return{ok:true}}
+ if(action==='set_active'){const o=p.kind==='driver'?LV(p.id):PA(p.id);if(!o||!o.profileId)throw new Error("Cette fiche n'a pas de compte de connexion.");
+  const u=accUser(o.profileId);if(!u||u.role==='manager')throw new Error('Ce compte ne peut pas être géré ici.');
+  if(p.kind==='driver'&&!p.active&&activeParcels(o))throw new Error('Ce livreur transporte encore des colis : réaffectez-les avant de désactiver son compte.');
+  o.active=p.active;u.active=p.active;if(p.kind==='driver'&&!p.active)o.statut='hors_service';save();return{ok:true}}
+ if(action==='reset_password'){const o=p.kind==='driver'?LV(p.id):PA(p.id);const u=o&&accUser(o.profileId);if(!u||u.role==='manager')throw new Error('Compte introuvable.');
+  const t=pw();u.pass=t;u.mustChange=true;save();return{temp_password:t}}
+ throw new Error('Action inconnue')}
+
+/* ---------- Première connexion : remplacement obligatoire du mot de passe provisoire ---------- */
+let pwPending=null,pwErr='',pwBusy=false;   // {email,temp} (Supabase, en mémoire seulement) ou {user} (démo)
+const pwRule=p=>p.length>=10&&/[A-Za-z]/.test(p)&&/\d/.test(p);
+function renderPwChange(){
+ const box=$('#login');
+ box.innerHTML=`<div class="login-card">
+  <div class="stack" style="align-items:center;gap:10px">${logoHtml(80)}<h1>Choisissez votre mot de passe</h1><p class="sub">Première connexion : remplacez le mot de passe provisoire reçu de FAST EXPRESS.</p></div>
+  <form class="stack" id="pwF" novalidate style="gap:12px">
+   <div class="field"><label for="pw1">Nouveau mot de passe</label><input class="input" id="pw1" type="password" autocomplete="new-password" style="min-height:46px;font-size:16px"><span class="small muted">10 caractères minimum, avec des lettres et des chiffres.</span></div>
+   <div class="field"><label for="pw2">Confirmez le mot de passe</label><input class="input" id="pw2" type="password" autocomplete="new-password" style="min-height:46px;font-size:16px"></div>
+   ${pwErr?`<div class="errbox">${ic('alert',16)}<span>${esc(pwErr)}</span></div>`:''}
+   <button class="bigbtn pri" type="button" id="pwGo" ${pwBusy?'disabled':''}>${pwBusy?'Enregistrement…':'Enregistrer et continuer'}</button>
+   <button class="btn ghost" type="button" id="pwCancel">Annuler et se déconnecter</button>
+  </form></div>`;
+ bindForm($('#pwF'),$('#pwGo'),pwSubmit);
+ $('#pwCancel').onclick=()=>{pwPending=null;pwErr='';renderLogin()};   // aucune session n'a été ouverte
+}
+async function pwSubmit(){
+ if(pwBusy||!pwPending)return;const a=$('#pw1').value,b=$('#pw2').value;
+ if(!pwRule(a)){pwErr='Mot de passe trop simple : 10 caractères minimum, avec des lettres et des chiffres.';return renderPwChange()}
+ if(a!==b){pwErr='Les deux mots de passe ne sont pas identiques.';return renderPwChange()}
+ pwBusy=true;pwErr='';renderPwChange();
+ try{
+  if(MODE==='supabase'){
+   // 1) le serveur vérifie le mot de passe provisoire, enregistre le nouveau et débloque le compte
+   const {email,temp}=pwPending;await window.FEDB.firstLogin(email,temp,a);pwPending=null;
+   // 2) connexion normale avec le nouveau mot de passe
+   const r=await window.FEDB.signIn(email,a);if(r.error)throw new Error('Mot de passe enregistré. Connectez-vous avec votre nouveau mot de passe ('+r.error+').');
+   try{await sbOpen(r.auth)}catch(e){await window.FEDB.signOut().catch(()=>{});AUTH=null;throw new Error('Mot de passe enregistré, mais le chargement des données a échoué : '+(e.message||'erreur inconnue')+'. Reconnectez-vous avec votre nouveau mot de passe.')}}
+  else{const u=pwPending.user;if(a===u.pass)throw new Error('Choisissez un mot de passe différent du mot de passe provisoire.');u.pass=a;u.mustChange=false;pwPending=null;AUTH=authFromUser(u);try{localStorage.setItem(SKEY,u.id)}catch(e){}}
+  pwBusy=false;toast('Mot de passe enregistré');loginDone();
+ }catch(e){pwBusy=false;pwErr=e.message||'Enregistrement impossible.';
+  if(pwPending&&['trop_de_tentatives','compte_desactive','identifiants_invalides'].includes(e.code))pwPending=null;   // retour à la connexion
+  if(pwPending)renderPwChange();else{loginErr=pwErr;pwErr='';renderLogin()}}
+}
+
 let pendingHash=null; // page demandée avant la connexion, rouverte ensuite si le rôle y a droit
 /* Ouvre une session Supabase : utilisateur, données, temps réel. Tout ou rien. */
 async function sbOpen(auth){AUTH=auth;try{await window.FEDB.loadAll();window.FEDB.subscribe(onRemoteChange)}catch(e){AUTH=null;throw e}}
@@ -1971,8 +2190,9 @@ function authFromUser(u){const a={userId:u.id,role:u.role,name:u.full_name,phone
  if(u.role==='driver')a.driverId=S.livreurs.find(l=>l.profileId===u.id)?.id;
  if(u.role==='partner')a.partnerId=S.partners.find(p=>p.profileId===u.id)?.id;return a}
 function renderLogin(){
+ if(pwPending)return renderPwChange();
  const box=$('#login');const demo=MODE==='demo';
- const grp=(role,t)=>{const us=S.users.filter(u=>u.role===role);return us.length?`<div class="acc-g">${t}</div>${us.map(u=>`<button class="acc" type="button" data-u="${esc(u.email)}"><span class="av" style="background:${role==='manager'?'#0e8a65':role==='driver'?(S.livreurs.find(l=>l.profileId===u.id)?.couleur||'#1d5ea8'):'#b5651d'};width:30px;height:30px;font-size:11px">${initials(u.full_name)}</span><span style="flex:1;min-width:0"><b style="display:block;font-size:13.5px">${esc(role==='partner'?(S.partners.find(p=>p.profileId===u.id)?.company_name||u.full_name):u.full_name)}</b><span class="mono">${esc(u.email)}</span></span></button>`).join('')}`:''};
+ const grp=(role,t)=>{const us=S.users.filter(u=>u.role===role&&u.active!==false);return us.length?`<div class="acc-g">${t}</div>${us.map(u=>`<button class="acc" type="button" data-u="${esc(u.email)}"><span class="av" style="background:${role==='manager'?'#0e8a65':role==='driver'?(S.livreurs.find(l=>l.profileId===u.id)?.couleur||'#1d5ea8'):'#b5651d'};width:30px;height:30px;font-size:11px">${initials(u.full_name)}</span><span style="flex:1;min-width:0"><b style="display:block;font-size:13.5px">${esc(role==='partner'?(S.partners.find(p=>p.profileId===u.id)?.company_name||u.full_name):u.full_name)}</b><span class="mono">${esc(u.email)}</span></span></button>`).join('')}`:''};
  box.innerHTML=`<div class="login-card">
   <div class="stack" style="align-items:center;gap:10px">${logoHtml(92)}<h1>Connexion</h1><p class="sub">Plateforme de livraison FAST EXPRESS</p><span class="mode-pill ${demo?'':'live'}">${demo?'Mode démonstration':'Mode Supabase · données réelles'}</span></div>
   <form class="stack" id="lgF" novalidate style="gap:12px">
@@ -1984,7 +2204,7 @@ function renderLogin(){
   ${demo?`<div class="stack" style="gap:6px"><p class="small muted" style="margin:0">Comptes de démonstration (mot de passe : <b class="mono">${esc(DEMO_PASSWORD)}</b>). Touchez un compte pour remplir le formulaire.</p>${grp('manager','Responsable')}${grp('driver','Livreurs')}${grp('partner','Partenaires')}</div>`:`<p class="small muted" style="margin:0;text-align:center">Votre compte est créé par FAST EXPRESS. Mot de passe oublié : contactez l'agence.</p>`}
   <div class="row wrap" style="justify-content:center;gap:6px"><a class="btn ghost" href="${modeQS()||'?'}#suivi">${ic('eye',16)}Suivre un colis</a>${!demo&&CFG.mode!=='supabase'?`<a class="btn ghost" href="?mode=demo">Revenir à la démo</a>`:''}</div>
  </div>`;
- box.querySelectorAll('[data-u]').forEach(b=>b.onclick=()=>{$('#lg1').value=b.dataset.u;$('#lg2').value=DEMO_PASSWORD;$('#lgGo').focus()});
+ box.querySelectorAll('[data-u]').forEach(b=>b.onclick=()=>{const u=S.users.find(x=>x.email===b.dataset.u);$('#lg1').value=b.dataset.u;$('#lg2').value=u&&u.pass?'':DEMO_PASSWORD;(u&&u.pass?$('#lg2'):$('#lgGo')).focus()});
  bindForm($('#lgF'),$('#lgGo'),doLogin);
 }
 async function doLogin(){
@@ -1992,16 +2212,26 @@ async function doLogin(){
  if(!email||!pass){loginErr='Saisissez votre e-mail et votre mot de passe.';renderLogin();return}
  loginBusy=true;loginErr='';renderLogin();$('#lg1').value=email;
  try{
-  if(MODE==='supabase'){const r=await window.FEDB.signIn(email,pass);if(r.error)throw new Error(r.error);
+  if(MODE==='supabase'){const r=await window.FEDB.signIn(email,pass);
+   if(r.error){
+    // Mot de passe provisoire ? Il n'ouvre jamais de session : le serveur le vérifie (sans rien débloquer)
+    if(CFG.adminFunction){let pend=null;try{pend=await window.FEDB.firstLogin(email,pass)}catch(e){if(['trop_de_tentatives','compte_desactive'].includes(e.code))throw e}
+     if(pend&&pend.pending){loginBusy=false;pwPending={email,temp:pass};pwErr='';renderPwChange();return}}
+    throw new Error(r.error)}
    try{await sbOpen(r.auth)}catch(e){await window.FEDB.signOut().catch(()=>{});AUTH=null;throw new Error('Connexion réussie, mais le chargement des données a échoué : '+(e.message||'erreur inconnue')+'. Vous avez été déconnecté.')}}
-  else{const u=S.users.find(x=>x.email.toLowerCase()===email.toLowerCase());if(!u||pass!==DEMO_PASSWORD)throw new Error('E-mail ou mot de passe incorrect.');AUTH=authFromUser(u);try{localStorage.setItem(SKEY,u.id)}catch(e){}}
-  loginBusy=false;log('livreur','',`${AUTH.name} s'est connecté`,AUTH.name);save();rtJoin();toast(`Bienvenue ${esc(first(AUTH.name))}`);
-  const want=pendingHash;pendingHash=null;location.hash=isDriver()?'livreur':want||(isPartner()?'partenaire':'tableau');route();
+  else{const u=S.users.find(x=>x.email.toLowerCase()===email.toLowerCase());if(!u||pass!==(u.pass||DEMO_PASSWORD))throw new Error('E-mail ou mot de passe incorrect.');
+   if(u.active===false)throw new Error('Ce compte est désactivé. Contactez FAST EXPRESS.');
+   if(u.mustChange){loginBusy=false;pwPending={user:u};pwErr='';renderPwChange();return}
+   AUTH=authFromUser(u);try{localStorage.setItem(SKEY,u.id)}catch(e){}}
+  loginBusy=false;loginDone();
  }catch(e){loginBusy=false;loginErr=e.message||'Connexion impossible.';renderLogin();$('#lg1').value=email}
 }
+function loginDone(){
+ log('livreur','',`${AUTH.name} s'est connecté`,AUTH.name);save();rtJoin();toast(`Bienvenue ${esc(first(AUTH.name))}`);
+ const want=pendingHash;pendingHash=null;location.hash=isDriver()?'livreur':want||(isPartner()?'partenaire':'tableau');route()}
 async function logout(){
  {const l=me();if(l&&onDuty(l)&&(isDriver()||drvPreview)){try{await goOffDuty(false)}catch(e){}}}
- rtLeave();gpsStop();drvPreview=null;drvId=null;AUTH=null;loginErr='';pendingHash=null;
+ rtLeave();gpsStop();drvPreview=null;drvId=null;AUTH=null;loginErr='';pendingHash=null;pwPending=null;pwErr='';
  if(MODE==='supabase'&&window.FEDB)await window.FEDB.signOut().catch(()=>{});
  try{localStorage.removeItem(SKEY)}catch(e){}
  AUTH=null;closeAll();history.replaceState(null,'',location.pathname+modeQS());route();toast('Vous êtes déconnecté');
@@ -2068,7 +2298,7 @@ async function boot(){
   window.FEDB.onAuth(ev=>{if(ev==='SIGNED_OUT'&&AUTH){gpsStop();rtLeave();AUTH=null;closeAll();loginErr='Votre session est terminée. Reconnectez-vous.';route()}});
  }else{
   S=load()||seed();save();
-  try{const id=localStorage.getItem(SKEY);const u=id&&S.users.find(x=>x.id===id);if(u)AUTH=authFromUser(u)}catch(e){}
+  try{const id=localStorage.getItem(SKEY);const u=id&&S.users.find(x=>x.id===id);if(u&&u.active!==false&&!u.mustChange)AUTH=authFromUser(u)}catch(e){}
  }
  setSim(MODE==='demo'&&S.sim!==false);
  if(AUTH)rtJoin();

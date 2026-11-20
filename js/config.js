@@ -75,4 +75,7 @@ window.FE_CONFIG = {
 
   // Mot de passe des comptes de démonstration (mode 'demo' uniquement)
   demoPassword: 'demo2026',
+  // Gestion des comptes livreurs / partenaires par le manager : nom de la fonction serveur
+  // Supabase (Edge Function). null tant qu'elle n'est pas déployée (voir supabase/09_gestion_utilisateurs.md).
+  adminFunction: null,
 };
