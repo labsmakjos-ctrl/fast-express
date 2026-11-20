@@ -103,7 +103,9 @@ await p.goto(URL);await p.waitForTimeout(600);
 await p.fill('#lg1','gts@test.ga');await p.fill('#lg2','secret');await p.click('#lgGo');await p.waitForTimeout(1000);
 ok('Partenaire : chargement réussi malgré drivers/driver_locations interdites',await p.evaluate(()=>AUTH&&cur==='partenaire'&&S.livreurs.length===0&&S.colis.length>0&&/Gabon Tech Store/.test(document.querySelector('#view').textContent)));
 ok('Libellé français « Partenaire » affiché (jamais « partner »)',await p.evaluate(()=>/Partenaire/.test(document.querySelector('#userBox').textContent)&&!/\bpartner\b/i.test(document.body.innerText)));
-// doublon de numéro : le numéro tiré est déjà pris dans Supabase (colis invisible pour ce partenaire)
+// doublon de numéro (création par le MANAGER) : le numéro tiré est déjà pris dans Supabase (colis absent de sa liste chargée)
+await p.evaluate(()=>logout());await p.waitForTimeout(400);
+await p.fill('#lg1','manager@test.ga');await p.fill('#lg2','secret');await p.click('#lgGo');await p.waitForTimeout(1000);
 const dupCode=await p.evaluate(()=>{const d=new Date();const ymd=String(d.getFullYear()).slice(2)+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0');const c='FE-'+ymd+'-DUPL';__MOCKDB.parcels.push({id:'zz',tracking_number:c,tracking_token:'tok-zz',confirmation_code:'1',client_name:'Autre',client_phone:'',delivery_address:'',status:'pending',driver_id:null,partner_id:'p-0',delivery_lat:null,delivery_lng:null,proof_photo_url:null,postponed_date:null});let k=0;window.randCode=n=>k++===0?'DUPL':'NEW2';return c});
 await p.click('#newBtn');await p.waitForTimeout(150);await p.fill('#nc3','Doublon Test');await p.fill('#nc4','+241 066 77 88 99');await p.selectOption('#nc5','Glass');await p.fill('#nc6','Repère doublon');await p.click('#ncSave');await p.waitForTimeout(1200);
 const dupRes=await p.evaluate(dc=>({rows:__MOCKDB.parcels.filter(r=>r.client_name==='Doublon Test').map(r=>r.tracking_number),local:S.colis.find(c=>c.dest.nom==='Doublon Test')?.code,dupTried:__MOCKLOG.some(x=>x.dup===dc)}),dupCode);

@@ -37,28 +37,35 @@ ok('Tableau de bord : derniers colis créés, activité récente, livraisons ter
 ok('Mention honnête : WhatsApp non automatique',/ne sont pas envoyés automatiquement/.test(await view(p)));
 for(const [sel,dest] of [['[data-pgo="colis"]','colis'],['[data-pgo="psuivi"]','psuivi'],['[data-pgo="phisto"]','phisto']]){await p.evaluate(()=>location.hash='partenaire');await p.waitForTimeout(150);await p.click('.pqa '+sel);await p.waitForTimeout(250);
  ok('Bouton rapide → '+dest,await p.evaluate(()=>cur)===dest)}
-// création
-await p.evaluate(()=>location.hash='partenaire');await p.waitForTimeout(150);
-await p.click('#pNew');await p.waitForTimeout(200);
-ok('Formulaire : expéditeur fixé (pas de choix d\'expéditeur)',await p.evaluate(()=>!document.querySelector('#nc1')&&/Gabon Tech Store/.test(document.querySelector('.md-h').textContent)));
+// création : réservée au manager
+ok('Partenaire : aucun bouton « Nouveau colis » (en-tête, tableau de bord, Mes colis)',await p.evaluate(()=>document.querySelector('#newBtn').hidden&&!document.querySelector('#pNew')));
+await p.evaluate(()=>location.hash='colis');await p.waitForTimeout(200);
+ok('Partenaire : pas de bouton de création dans « Mes colis »',await p.evaluate(()=>!document.querySelector('#cNew')&&document.querySelector('#newBtn').hidden));
+await p.evaluate(()=>newColisModal());await p.waitForTimeout(150);
+ok('Partenaire : formulaire de création inaccessible (même appelé directement)',await p.evaluate(()=>!document.querySelector('#modal').classList.contains('on')&&!document.querySelector('#modal').classList.contains('on')));
+const nBefore=await p.evaluate(()=>myParcels().length);
+await p.evaluate(()=>logout());await p.waitForTimeout(300);
+await p.click('[data-u="manager@fastexpress.demo"]');await p.click('#lgGo');await p.waitForTimeout(500);
+await p.click('#newBtn');await p.waitForTimeout(200);
+ok('Manager : choix du partenaire dans le formulaire',await p.evaluate(()=>!!document.querySelector('#nc1')&&[...document.querySelectorAll('#nc1 option')].some(o=>o.textContent==='Gabon Tech Store')));
+await p.selectOption('#nc1',{label:'Gabon Tech Store'});
 await p.fill('#nc3','Sandrine Moussavou');await p.fill('#nc4','066 12 34 56');
-const zs=await p.$('#nc5');if(zs)await p.selectOption('#nc5',{index:3});
-const lat=await p.$('#nc12');if(lat)await p.fill('#nc12','0.4115, 9.4335');
+if(await p.$('#nc12'))await p.fill('#nc12','0.4115, 9.4335');
 await p.fill('#nc6','Face à la station Total');
 await p.click('#ncSave');await p.waitForTimeout(500);
-const created=await p.evaluate(()=>{const c=S.colis[0];return{code:c.code,partner:c.partnerId===AUTH.partnerId,exp:c.exp.nom,otp:c.otp,modal:!!document.querySelector('#pcCode'),shown:document.querySelector('#pcCode')?.textContent,link:document.querySelector('#pcLink')?.value,sync:document.querySelector('#pcSync')?.textContent}});
-ok('Création : confirmation avec numéro unique',created.modal&&created.shown===created.code&&/^FE-/.test(created.code),JSON.stringify(created));
-ok('Création : expéditeur = le partenaire connecté',created.partner&&created.exp==='Gabon Tech Store');
-ok('Création : lien de suivi affiché',/[?&]suivi=/.test(created.link||''),created.link);
-ok('Création : le code de remise n\'apparaît pas',!(await p.$eval('#modal',e=>e.textContent)).includes(created.otp));
-await p.click('#pcWa');await p.waitForTimeout(100);
-const wa=await p.evaluate(()=>window.__OPENED.at(-1));
-ok('WhatsApp : lien wa.me vers le destinataire (+241) avec le lien de suivi',/^https:\/\/wa\.me\/241066123456\?text=/.test(wa)&&decodeURIComponent(wa).includes(created.link)&&decodeURIComponent(wa).includes(created.code),wa);
-ok('WhatsApp : le message ne contient pas le code de remise',!decodeURIComponent(wa).includes(' '+created.otp));
-await p.click('#pcOpen');await p.waitForTimeout(300);
+const created=await p.evaluate(()=>{const c=S.colis.find(x=>x.dest.nom==='Sandrine Moussavou');return c&&{code:c.code,partnerId:c.partnerId,exp:c.exp.nom,otp:c.otp,token:c.token}});
+ok('Manager : colis créé et associé au partenaire choisi',created&&created.exp==='Gabon Tech Store'&&/^FE-/.test(created.code),JSON.stringify(created));
+await p.evaluate(()=>{closeAll();logout()});await p.waitForTimeout(300);
+await p.click('[data-u="gabon.tech.store@fastexpress.demo"]');await p.click('#lgGo');await p.waitForTimeout(500);
+ok('Partenaire : le colis créé par le manager apparaît dans son espace',await p.evaluate(c=>myParcels().length&&CO(c).partnerId===AUTH.partnerId&&document.querySelector('#pkTotal .v').textContent.trim()===String(myParcels().length),created.code)&&await p.evaluate(()=>myParcels().length)===nBefore+1);
+await p.evaluate(c=>openColis(c),created.code);await p.waitForTimeout(300);
 const dr=await p.evaluate(()=>{const d=document.querySelector('#drawer');return{t:d.textContent,share:!!d.querySelector('#drWaShare'),otpBox:!!d.querySelector('#drOtpBox')}});
-ok('Fiche : destinataire, repère, n°, date de création, historique, lien, partage WhatsApp',dr.share&&dr.t.includes('Sandrine Moussavou')&&dr.t.includes('Face à la station Total')&&dr.t.includes(created.code)&&/Enregistré/.test(dr.t)&&/Historique du colis/.test(dr.t)&&/Copier le lien pour le client/.test(dr.t)&&/Aperçu de la page client/.test(dr.t)&&/sert uniquement à informer votre client/.test(dr.t));
+ok('Fiche : destinataire, repère, n°, date de création, historique, lien, partage WhatsApp',dr.share&&dr.t.includes('Sandrine Moussavou')&&dr.t.includes('Face à la station Total')&&dr.t.includes(created.code)&&/Enregistré par FAST EXPRESS pour Gabon Tech Store/.test(dr.t)&&/Historique du colis/.test(dr.t)&&/Copier le lien pour le client/.test(dr.t)&&/Aperçu de la page client/.test(dr.t)&&/sert uniquement à informer votre client/.test(dr.t));
 ok('Fiche partenaire : aucun code de remise (ni bloc, ni valeur)',!dr.otpBox&&!/Code de remise/.test(dr.t)&&!dr.t.includes(created.otp));
+await p.click('#drWaShare');await p.waitForTimeout(100);
+const wa=await p.evaluate(()=>window.__OPENED.at(-1));
+ok('WhatsApp : lien wa.me vers le destinataire (+241) avec le lien de suivi',/^https:\/\/wa\.me\/241066123456\?text=/.test(wa)&&decodeURIComponent(wa).includes('suivi='+created.token)&&decodeURIComponent(wa).includes(created.code),wa);
+ok('WhatsApp : le message ne contient pas le code de remise',!decodeURIComponent(wa).includes(' '+created.otp));
 await p.evaluate(()=>closeAll());
 // Mes colis : recherche
 await p.evaluate(()=>location.hash='colis');await p.waitForTimeout(200);
@@ -69,18 +76,18 @@ await p.evaluate(()=>location.hash='psuivi');await p.waitForTimeout(600);
 const ps=await p.evaluate(()=>({mk:Object.keys(PSV.mk),t:document.querySelector('#psList').textContent,code:window.__PSC}));
 ok('Suivi en direct (démo) : marqueur pour le colis en livraison',ps.mk.includes(ps.code)&&/Dernière position GPS : \d\d:\d\d/.test(ps.t),JSON.stringify(ps.mk));
 ok('Suivi en direct : aucune demande de lien de suivi au partenaire',!/lien de suivi reçu|Ouvrez le lien/i.test(await view(p))&&!(await p.$('[data-pspub]')));
-await p.evaluate(()=>PSV.map.setView([0.2,9.2],10));
-await p.click(`[data-psc="${ps.code}"] .small`);await p.waitForTimeout(200);
+await p.evaluate(()=>PSV.map.setView([0.2,9.2],10,{animate:false}));
+await p.click(`[data-psc="${ps.code}"] .small`);await p.waitForTimeout(700);
 ok('Suivi en direct : cliquer sur un colis centre la carte sur son livreur',await p.evaluate(c=>{const m=PSV.mk[c],z=PSV.map;return PSV.sel===c&&z.getZoom()===16&&z.getCenter().distanceTo(m.getLatLng())<5},ps.code));
 await p.click(`[data-psshare="${ps.code}"]`);await p.waitForTimeout(100);
 ok('Suivi en direct : « Partager au client » ouvre WhatsApp avec le lien de suivi',await p.evaluate(c=>{const u=decodeURIComponent(window.__OPENED.at(-1)||'');return/^https:\/\/wa\.me\//.test(u)&&u.includes('suivi='+CO(c).token)},ps.code));
 await p.evaluate(()=>{S.livreurs[0].posAt=Date.now()-30*60000;psPaint()});await p.waitForTimeout(100);
 const ps2=await p.evaluate(()=>({mk:Object.keys(PSV.mk),t:document.querySelector('#psList').textContent}));
-ok('Suivi en direct : position trop ancienne → « Position indisponible », marqueur retiré',ps2.mk.length===0&&/Position indisponible/.test(ps2.t));
+ok('Suivi en direct : position trop ancienne → « Position indisponible », marqueur retiré',!ps2.mk.includes(ps.code)&&/Position indisponible/.test(await p.$eval(`[data-psc="${ps.code}"]`,e=>e.textContent)));
 await p.evaluate(()=>location.hash='suivi');await p.waitForTimeout(250);
 ok('Ancien favori #suivi → « Suivi en direct » (pas la page client)',await p.evaluate(()=>cur==='psuivi'));
 // historique
-await p.evaluate(()=>{const m=S.colis.filter(c=>c.partnerId===AUTH.partnerId);const c=m.find(x=>x.statut==='en_attente');if(c){c.statut='annule';c.motif='Annulé par le partenaire';c.hist.push({t:Date.now(),s:'annule',note:''})}save()});
+await p.evaluate(()=>{const m=S.colis.filter(c=>c.partnerId===AUTH.partnerId);const c=m.find(x=>['en_attente','attribue','recupere'].includes(x.statut)&&x.code!==window.__PSC);if(c){c.statut='annule';c.motif='Annulé par le partenaire';c.hist.push({t:Date.now(),s:'annule',note:''})}save()});
 await p.evaluate(()=>{PH={q:'',s:'tous',p:'tout'};location.hash='phisto'});await p.waitForTimeout(300);
 const h=await p.evaluate(()=>{const m=S.colis.filter(c=>c.partnerId===AUTH.partnerId&&['livre','annule','reporte','echec'].includes(c.statut));return{exp:m.length,rows:document.querySelectorAll('#view tbody tr').length,other:[...document.querySelectorAll('#view tbody tr')].some(r=>CO(r.dataset.c).partnerId!==AUTH.partnerId)}});
 ok('Historique : colis terminés du partenaire seulement',h.exp>0&&h.rows===h.exp&&!h.other,JSON.stringify(h));
@@ -183,23 +190,23 @@ ok('Supabase : tableau de bord mis à jour automatiquement (statut livré relu)'
 await q.evaluate(()=>location.hash='colis');await q.waitForTimeout(300);
 ok('Supabase : « Mes colis » affiche les statuts actuels',await q.evaluate(()=>{const r=[...document.querySelectorAll('#view tr[data-c]')];const g=c=>r.find(x=>x.dataset.c===c);return!!g('FE-26-20006')&&/Livré/.test(g('FE-26-20006').textContent)&&/livraison|En cours/i.test(g('FE-26-20001').textContent)}));
 await q.evaluate(()=>{window.__PG_DOWN=false});
-// création
+// création : impossible pour le partenaire, même par requête directe
 await q.evaluate(()=>location.hash='partenaire');await q.waitForTimeout(200);
-await q.click('#pNew');await q.waitForTimeout(200);
-await q.fill('#nc3','Ornella Koumba');await q.fill('#nc4','+241 077 88 99 00');if(await q.$('#nc12'))await q.fill('#nc12','0.4115, 9.4335');await q.fill('#nc6','Résidence Les Palmiers');
-await q.click('#ncSave');await q.waitForTimeout(900);
-const sc=await q.evaluate(()=>({code:document.querySelector('#pcCode')?.textContent,sync:document.querySelector('#pcSync')?.textContent,link:document.querySelector('#pcLink')?.value,ins:__MOCKLOG.filter(x=>x.t==='parcels'&&x.op==='insert').at(-1)}));
-ok('Supabase : colis enregistré (confirmation « Enregistré dans Supabase »)',/Enregistré dans Supabase/.test(sc.sync||'')&&sc.ins&&sc.ins.row.partner_id==='p-1'&&sc.ins.row.tracking_number===sc.code,JSON.stringify(sc).slice(0,220));
-ok('Supabase : lien de suivi individuel (?mode=supabase&suivi=<jeton>)',sc.link&&sc.link.includes('?mode=supabase&suivi='+sc.ins.row.tracking_token));
-ok('Supabase : la confirmation ne montre pas le code de remise',!(await q.$eval('#modal',e=>e.textContent)).includes(sc.ins.row.confirmation_code));
-await q.click('#mX');await q.waitForTimeout(100);
-// échec d'enregistrement : message clair
-await q.evaluate(()=>{window.__FAIL_INSERT=true});
-await q.click('#pNew');await q.waitForTimeout(200);
-await q.fill('#nc3','Test Panne');await q.fill('#nc4','+241 077 11 11 11');if(await q.$('#nc12'))await q.fill('#nc12','0.40, 9.45');await q.fill('#nc6','Repère panne');
-await q.click('#ncSave');await q.waitForTimeout(1200);
-ok('Supabase : échec d\'enregistrement signalé clairement',/L'enregistrement a échoué/.test(await q.$eval('#pcSync',e=>e.textContent).catch(()=>'')),await q.$eval('#pcSync',e=>e.textContent).catch(()=>'(fenêtre absente)'));
-await q.evaluate(()=>{window.__FAIL_INSERT=false;closeAll()});await q.waitForTimeout(800);
+ok('Supabase : partenaire sans bouton ni formulaire de création',await q.evaluate(()=>document.querySelector('#newBtn').hidden&&!document.querySelector('#pNew')&&(newColisModal(),!document.querySelector('#modal').classList.contains('on'))));
+const direct=await q.evaluate(async()=>{const sb=window.supabase.createClient(FE_CONFIG.supabaseUrl,FE_CONFIG.supabaseAnonKey);
+ const r=await sb.from('parcels').insert({tracking_number:'FE-PIRATE-1',tracking_token:'5b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e',client_name:'Pirate',client_phone:'',delivery_address:'x',status:'pending',partner_id:'p-1'});
+ let app='';try{await window.FEDB.run('createParcel',{code:'FE-PIRATE-2',token:'6c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f',dest:{nom:'Pirate',tel:''},adresse:'x',x:0,y:0,partnerId:'p-1',hist:[]})}catch(e){app=e.message}
+ return{err:r.error&&r.error.message,app,rows:__MOCKDB.parcels.filter(x=>/PIRATE/.test(x.tracking_number)).length}});
+ok('Supabase : requête directe d\'insertion par le partenaire refusée (RLS)',/row-level security/.test(direct.err||'')&&direct.rows===0,JSON.stringify(direct));
+ok('Supabase : l\'application refuse aussi la création côté partenaire',/Seule l'agence FAST EXPRESS/.test(direct.app));
+// un colis créé par le manager pour ce partenaire apparaît automatiquement (temps réel coupé : relecture)
+await q.evaluate(()=>{window.__PG_DOWN=true;__MOCKDB.parcels.push({id:'m1',tracking_number:'FE-26-30001',tracking_token:'7d3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a',confirmation_code:'8888',client_name:'Laure Mintsa',client_phone:'+241 066 00 00 08',delivery_address:'Ancien Sobraga',status:'pending',driver_id:null,partner_id:'p-1',delivery_lat:0.41,delivery_lng:9.46,proof_photo_url:null,postponed_date:null,created_at:new Date().toISOString()});
+ __MOCKDB.parcels.push({id:'m2',tracking_number:'FE-26-30002',tracking_token:'8e4f5a6b-7c8d-4e9f-8a1b-2c3d4e5f6a7b',confirmation_code:'9999',client_name:'Client Autre',client_phone:'',delivery_address:'x',status:'pending',driver_id:null,partner_id:'p-0',delivery_lat:0.41,delivery_lng:9.46,proof_photo_url:null,postponed_date:null,created_at:new Date().toISOString()})});
+await q.waitForTimeout(4500);
+ok('Supabase : colis créé par le manager → apparaît automatiquement chez le partenaire',await q.evaluate(()=>!!CO('FE-26-30001')&&/FE-26-30001/.test(document.querySelector('#view').textContent)));
+ok('Supabase : le colis d\'un autre partenaire n\'apparaît pas',await q.evaluate(()=>!CO('FE-26-30002')&&!/FE-26-30002/.test(document.body.textContent)));
+ok('Supabase : aucun code de remise affiché pour ce nouveau colis',await q.evaluate(()=>!/\b8888\b/.test(document.body.textContent)));
+await q.evaluate(()=>{window.__PG_DOWN=false});
 // mon entreprise : sans politique RLS partenaire → refus clair ; avec la politique 07 → enregistré
 await q.evaluate(()=>{pEdit=false;location.hash='pentreprise'});await q.waitForTimeout(300);
 ok('Supabase : adresse non modifiable tant que la colonne n\'existe pas',await q.evaluate(()=>/sera modifiable prochainement/.test(document.querySelector('#view').textContent)));
@@ -225,6 +232,16 @@ await q.fill('#lg1','manager@test.ga');await q.fill('#lg2','secret');await q.cli
 ok('Supabase : manager → tableau de bord habituel',await q.evaluate(()=>AUTH.role==='manager'&&cur==='tableau'));
 await q.evaluate(()=>openColis('FE-26-20002'));await q.waitForTimeout(300);
 ok('Supabase : manager voit toujours le code de remise',await q.evaluate(()=>/2222/.test(document.querySelector('#drOtpBox')?.textContent||'')));
+await q.evaluate(()=>closeAll());
+await q.click('#newBtn');await q.waitForTimeout(200);
+await q.selectOption('#nc1','p-1');await q.fill('#nc3','Ornella Koumba');await q.fill('#nc4','+241 077 88 99 00');if(await q.$('#nc12'))await q.fill('#nc12','0.4115, 9.4335');await q.fill('#nc6','Résidence Les Palmiers');
+await q.click('#ncSave');await q.waitForTimeout(900);
+const mins=await q.evaluate(()=>({ins:__MOCKLOG.filter(x=>x.t==='parcels'&&x.op==='insert'&&x.row).at(-1),rls:__MOCKLOG.filter(x=>x.t==='parcels'&&x.rls).length,c:S.colis.find(c=>c.dest.nom==='Ornella Koumba')}));
+ok('Supabase : le manager crée un colis associé au partenaire choisi (accepté par la règle 08)',mins.ins&&mins.ins.row.partner_id==='p-1'&&mins.ins.row.client_name==='Ornella Koumba'&&mins.c&&!!mins.c.dbId,JSON.stringify(mins.ins&&mins.ins.row).slice(0,200));
+const mcode=mins.c&&mins.c.code;
+await q.evaluate(()=>logout());await q.waitForTimeout(500);
+await q.fill('#lg1','gts@test.ga');await q.fill('#lg2','secret');await q.click('#lgGo');await q.waitForTimeout(1200);
+ok('Supabase : ce colis est dans l\'espace du partenaire (Mes colis)',await q.evaluate(c=>{location.hash='colis';return!!CO(c)&&CO(c).partnerId==='p-1'},mcode)&&(await q.waitForTimeout(300),/Ornella Koumba/.test(await view(q))));
 await cs.close();
 
 const real=errs.filter(e=>!/simulated failure/.test(e));ok('Aucune erreur JavaScript (hors panne simulée volontaire)',real.length===0,real.join(' | '));

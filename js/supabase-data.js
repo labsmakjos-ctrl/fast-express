@@ -251,6 +251,8 @@
       lat: h && Number.isFinite(h.lat) ? h.lat : null, lng: h && Number.isFinite(h.lng) ? h.lng : null }, who())), 'Historique');
   }
   async function createParcel(c) {
+    // Création réservée au manager (contrôlée aussi par Supabase : supabase/08_…)
+    if (!me || me.role !== 'manager') throw new Error("Seule l'agence FAST EXPRESS peut enregistrer un nouveau colis");
     const g = toLL(c.x, c.y);
     const row = {
       tracking_number: c.code, tracking_token: c.token,
@@ -309,7 +311,14 @@
       if (CFG.batteryAsFraction && row.battery_level != null) row.battery_level = row.battery_level / 100;
       return row;
     });
-    check(await client().from('driver_locations').insert(rows.length === 1 ? rows[0] : rows), 'Position GPS');
+    const res = await client().from('driver_locations').insert(rows.length === 1 ? rows[0] : rows);
+    if (res.error && /row-level security/i.test(res.error.message || '')) {
+      // Refus des règles RLS de driver_locations (voir supabase/08_…) : message clair, détail technique en console
+      console.error('[Supabase] Position GPS refusée par RLS', res.error);
+      const e = new Error("Position non enregistrée : Supabase refuse l'écriture (règle de sécurité de driver_locations). Prévenez l'agence FAST EXPRESS.");
+      e.details = res.error; throw e;
+    }
+    check(res, 'Position GPS');
   }
   /* Colonnes lues pour les colis. Le code de remise est lu pour le MANAGER (il le communique au client).
      Quand la vérification est faite par le serveur (CFG.deliveryRpc), il n'est plus chargé chez le livreur

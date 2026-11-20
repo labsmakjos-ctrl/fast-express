@@ -284,7 +284,7 @@ window.addEventListener('fe-code-changed',e=>{const {old,code}=e.detail;S.log.fo
 function createColis(d){
  const code=nextCode();
  const P=PA(d.partnerId)||S.partners[0];const pt=d.point;
- const c={id:'C'+code.slice(6),dbId:null,code,token:uuid(),partnerId:P.id,exp:{nom:P.company_name,tel:P.contact_phone},dest:{nom:d.destNom,tel:d.destTel},zone:d.zone||zoneOf(pt),x:pt.x,y:pt.y,precision:d.precision||null,adresse:d.adresse,type:d.type,poids:d.poids,cod:d.cod,frais:fraisCalc(pt,d.type,d.poids),statut:'en_attente',livreurId:null,createdAt:Date.now(),otp:MODE==='supabase'&&CFG.deliveryCodeRpc?'':newOtp(),hist:[{t:Date.now(),s:'en_attente',note:P.company_name===COMPTOIR_NAME?`Déposé au comptoir de l'agence de Glass${d.depositor?' par '+d.depositor:''}`:`Enregistré par ${P.company_name}`,by:d.who||me0()}],motif:'',postponedDate:null};
+ const c={id:'C'+code.slice(6),dbId:null,code,token:uuid(),partnerId:P.id,exp:{nom:P.company_name,tel:P.contact_phone},dest:{nom:d.destNom,tel:d.destTel},zone:d.zone||zoneOf(pt),x:pt.x,y:pt.y,precision:d.precision||null,adresse:d.adresse,type:d.type,poids:d.poids,cod:d.cod,frais:fraisCalc(pt,d.type,d.poids),statut:'en_attente',livreurId:null,createdAt:Date.now(),otp:MODE==='supabase'&&CFG.deliveryCodeRpc?'':newOtp(),hist:[{t:Date.now(),s:'en_attente',note:P.company_name===COMPTOIR_NAME?`Déposé au comptoir de l'agence de Glass${d.depositor?' par '+d.depositor:''}`:`Enregistré par FAST EXPRESS pour ${P.company_name}`,by:d.who||me0()}],motif:'',postponedDate:null};
  S.colis.unshift(c);log('creation',c.code,logText(c,c.hist[0]),d.who);
  const sent=pushWA(c,'creation');
  save();Object.defineProperty(c,'_sync',{value:remote('createParcel',c),configurable:true,writable:true});return{c,sent}}
@@ -536,14 +536,16 @@ function fieldErr(id,msg){const el=$('#'+id);if(!el)return;el.classList.add('inv
 function clearErrs(root){root.querySelectorAll('.invalid').forEach(e=>{e.classList.remove('invalid');e.removeAttribute('aria-invalid')});root.querySelectorAll('.ferr').forEach(e=>e.remove())}
 const digits=t=>String(t||'').replace(/\D/g,'');
 let savingColis=false,newCode=null;
+/* Création des colis : réservée au MANAGER (aussi contrôlée dans Supabase, voir supabase/08_…) */
+const canCreate=()=>!!AUTH&&isMgr();
 function newColisModal(){
+ if(!canCreate()){toast('Seule l\'agence FAST EXPRESS peut enregistrer un nouveau colis','warn');return}
  const zo=ZONES.map(z=>`<option>${z.n}</option>`).join('');
- const myP=isPartner()?PA(AUTH.partnerId):null;
  const partOpts=S.partners.map(p=>`<option value="${p.id}">${esc(p.company_name)}</option>`).join('');
  openModal(`<form id="ncF" novalidate>
- <div class="md-h"><div><h2>Nouveau colis</h2><p class="small muted" style="margin:2px 0 0">${myP?esc(myP.company_name)+' · envoi via FAST EXPRESS':'Enregistrement à l\'agence de Glass'}</p></div><button type="button" class="x" id="mX" aria-label="Fermer">${ic('x')}</button></div>
+ <div class="md-h"><div><h2>Nouveau colis</h2><p class="small muted" style="margin:2px 0 0">Enregistrement à l'agence de Glass</p></div><button type="button" class="x" id="mX" aria-label="Fermer">${ic('x')}</button></div>
  <div class="md-b">
-  ${myP?'':`<fieldset class="fs"><legend>Expéditeur</legend><div class="f2"><div class="field"><label for="nc1">Expéditeur *</label><select class="select" id="nc1">${partOpts}</select></div><div class="field" id="nc2F"><label for="nc2">Nom du déposant (comptoir)</label><input class="input" id="nc2" placeholder="Ex. Brice Ndong"></div></div></fieldset>`}
+  <fieldset class="fs"><legend>Expéditeur</legend><div class="f2"><div class="field"><label for="nc1">Partenaire expéditeur *</label><select class="select" id="nc1">${partOpts}</select></div><div class="field" id="nc2F"><label for="nc2">Nom du déposant (comptoir)</label><input class="input" id="nc2" placeholder="Ex. Brice Ndong"></div></div></fieldset>
   <fieldset class="fs"><legend>Destinataire</legend><div class="f2"><div class="field"><label for="nc3">Nom complet *</label><input class="input" id="nc3" placeholder="Ex. Gaëlle Nguema" required></div><div class="field"><label for="nc4">Téléphone WhatsApp *</label><input class="input" id="nc4" placeholder="+241 066 00 00 00" required></div></div>
   <div class="f2"><div class="field"><label for="nc5">Quartier</label><select class="select" id="nc5"><option value="">Choisir un quartier…</option>${zo}</select></div><div class="field"><label for="nc12">Coordonnées GPS (facultatif)</label><input class="input mono" id="nc12" placeholder="0.39120, 9.45670" inputmode="decimal"></div></div>
   <div class="field"><label for="nc6">Adresse / point de repère *</label><input class="input" id="nc6" placeholder="Ex. Derrière la pharmacie, portail bleu" required></div>
@@ -583,7 +585,7 @@ function readColisForm(){
  const poids=HAS.weight?parseFloat(v('nc8').replace(',','.')):null;
  const cod=HAS.cod&&v('nc9')==='cod'?Math.round(parseFloat(v('nc10').replace(',','.'))||0):0;
  const g=readPoint();
- return{partnerId:isPartner()?AUTH.partnerId:v('nc1')||S.partners[0]?.id,depositor:v('nc2'),destNom:v('nc3'),destTel:v('nc4'),zone:g.zone||null,point:g.point||null,precision:g.precision,pointErr:g.err,adresse:v('nc6'),type:HAS.type?v('nc7')||'standard':'standard',poids,cod,payMode:v('nc9'),auto:isMgr()&&!!$('#nc11')?.checked};
+ return{partnerId:v('nc1')||S.partners[0]?.id,depositor:v('nc2'),destNom:v('nc3'),destTel:v('nc4'),zone:g.zone||null,point:g.point||null,precision:g.precision,pointErr:g.err,adresse:v('nc6'),type:HAS.type?v('nc7')||'standard':'standard',poids,cod,payMode:v('nc9'),auto:isMgr()&&!!$('#nc11')?.checked};
 }
 /* Validation des champs obligatoires ; renvoie la liste des erreurs */
 function validateColis(d){
@@ -598,7 +600,7 @@ function validateColis(d){
  return e;
 }
 function saveNewColis(){
- if(savingColis)return;                      // empêche le double enregistrement
+ if(savingColis||!canCreate())return;        // empêche le double enregistrement ; manager uniquement
  const form=$('#ncF');if(!form)return;
  clearErrs(form);const box=$('#ncErr');box.hidden=true;
  const d=readColisForm();const errs=validateColis(d);
@@ -619,7 +621,6 @@ function saveNewColis(){
   // afficher le colis dans la liste : filtres réinitialisés et ligne mise en évidence
   colisF={q:'',s:'tous',z:'',p:'auj'};newCode=c.code;
   closeAll();
-  if(isPartner()){savingColis=false;render();pCreatedModal(c);if(!persisted&&MODE==='demo')toast('Stockage local indisponible : le colis restera visible jusqu\'à la fermeture de la page');return}
   if(cur==='colis')render();else go('colis');
   toast(`Colis ${c.code} enregistré${c.livreurId?' et attribué à '+esc(LV(c.livreurId).nom):''}`);
   if(sent)waToast(c,'creation');
@@ -694,7 +695,7 @@ function render(){
  if(login){renderLogin();return}
  if(d){R.livreur();return}
  const v=[...VIEWS,...PVIEWS].find(x=>x.id===cur);$('#pgTitle').textContent=v.l;$('#pgSub').textContent=v.sub();
- $('#newBtn').hidden=!AUTH||isDriver();renderNav();renderUser();R[cur]();}
+ $('#newBtn').hidden=!canCreate();renderNav();renderUser();R[cur]();}
 function renderUser(){
  const u=$('#userBox');if(!AUTH){u.innerHTML='';return}
  const role={manager:'Responsable des opérations',partner:'Partenaire expéditeur',driver:'Livreur'}[AUTH.role];
@@ -784,7 +785,7 @@ R.colis=()=>{
   <div class="search">${ic('search',16)}<input class="input" id="cQ" placeholder="N° de suivi, nom, téléphone, quartier…" value="${esc(colisF.q)}" aria-label="Rechercher"></div>
   <select class="select" id="cZ" style="width:auto" aria-label="Quartier"><option value="">Tous les quartiers</option>${ZONES.map(z=>`<option ${colisF.z===z.n?'selected':''}>${z.n}</option>`).join('')}<option value="__none" ${colisF.z==='__none'?'selected':''}>Quartier non déterminé</option></select>
   <select class="select" id="cP" style="width:auto" aria-label="Période"><option value="auj" ${colisF.p==='auj'?'selected':''}>Aujourd'hui</option><option value="7j" ${colisF.p==='7j'?'selected':''}>7 derniers jours</option><option value="all" ${colisF.p==='all'?'selected':''}>Tout</option></select>
-  <button class="btn pri" id="cNew" style="margin-left:auto">${ic('plus',16)}Nouveau colis</button>
+  ${canCreate()?`<button class="btn pri" id="cNew" style="margin-left:auto">${ic('plus',16)}Nouveau colis</button>`:''}
  </div>
  <div class="chips" id="cS">${['tous',...Object.keys(ST)].map(k=>`<button class="chip ${colisF.s===k?'on':''}" data-s="${k}">${k==='tous'?'Tous':ST[k].l}<b>${counts[k]}</b></button>`).join('')}</div>
  <div class="card"><div class="tbl-wrap"><table>
@@ -798,7 +799,7 @@ R.colis=()=>{
  $('#cP').onchange=e=>{colisF.p=e.target.value;R.colis()};
  document.querySelectorAll('#cS [data-s]').forEach(b=>b.onclick=()=>{colisF.s=b.dataset.s;R.colis()});
  document.querySelectorAll('tr[data-c]').forEach(r=>r.onclick=()=>openColis(r.dataset.c));
- $('#cNew').onclick=newColisModal;
+ const cn=$('#cNew');if(cn)cn.onclick=newColisModal;
  const rs=$('#cReset');if(rs)rs.onclick=()=>{colisF={q:'',s:'tous',z:'',p:'all'};R.colis()};
  if(newCode){const tr=document.querySelector(`tr[data-c="${newCode}"]`);if(tr)tr.scrollIntoView({block:'nearest'});setTimeout(()=>{newCode=null},4000)}
 };
@@ -1681,10 +1682,10 @@ R.partenaire=()=>{
  const kpi=(cls,icon,l,v,d,id)=>`<div class="card kpi ${cls}" id="${id}"><span class="l">${ic(icon,15)}${l}</span><span class="v">${v}</span><span class="d">${d}</span></div>`;
  $('#view').innerHTML=`
  <div class="pqa">
-  <button class="btn pri" id="pNew">${ic('plus',16)}Nouveau colis</button>
-  <button class="btn" data-pgo="colis">${ic('box',16)}Mes colis</button>
+  <button class="btn pri" data-pgo="colis">${ic('box',16)}Mes colis</button>
   <button class="btn" data-pgo="psuivi">${ic('map',16)}Suivi en direct</button>
   <button class="btn" data-pgo="phisto">${ic('clock',16)}Historique</button>
+  <button class="btn" data-pgo="preleves">${ic('gauge',16)}Mes relevés</button>
  </div>
  <div class="kpis pkpis">
   ${kpi('hero','box','Colis créés',mine.length,`${esc(P?.company_name||'')}`,'pkTotal')}
@@ -1698,7 +1699,7 @@ R.partenaire=()=>{
  <div class="grid dash-a">
   <div class="card"><div class="card-h"><div><h2>Derniers colis créés</h2><p>Vos 6 envois les plus récents</p></div></div>
    ${recents.length?`<div class="tbl-wrap"><table><thead><tr><th>N° de suivi</th><th>Destinataire</th><th>Quartier</th><th>Statut</th><th>Créé</th></tr></thead><tbody>${recents.map(row).join('')}</tbody></table></div>`
-     :`<div class="empty">${ic('box',26)}Aucun colis pour le moment.<br>Créez votre premier envoi avec « Nouveau colis ».</div>`}</div>
+     :`<div class="empty">${ic('box',26)}Aucun colis pour le moment.<br>Les colis que FAST EXPRESS enregistre pour vous apparaîtront ici automatiquement.</div>`}</div>
   <div class="card"><div class="card-h"><div><h2>Activité récente</h2><p>Les dernières étapes de vos colis</p></div></div><div class="card-b" style="padding-top:4px">
    ${activite.length?`<div class="feed">${activite.map(({c,h})=>`<div class="feed-i" data-c="${c.code}" style="cursor:pointer"><span class="dot ${pDot(h.s)}">${ic(h.s==='livre'?'check':['echec','annule','reporte'].includes(h.s)?'alert':'truck',14)}</span><div><p><b class="mono">${c.code}</b> · ${ST[h.s]?ST[h.s].l:''}${['echec','annule','reporte'].includes(h.s)&&c.statut===h.s&&c.motif?` · ${esc(c.motif)}`:''}</p><small>${esc(c.dest.nom)} · ${dayLabel(h.t)} à ${hm(h.t)}</small></div></div>`).join('')}</div>`
      :`<div class="empty" style="padding:20px 8px">${ic('clock',22)}Aucune activité pour le moment.</div>`}
@@ -1709,39 +1710,9 @@ R.partenaire=()=>{
   ${finis.length?`<div class="tbl-wrap"><table><thead><tr><th>N° de suivi</th><th>Destinataire</th><th>Quartier</th><th>Statut final</th><th>Terminé</th></tr></thead><tbody>${finis.map(c=>`<tr data-c="${c.code}"><td class="mono" style="font-weight:600">${c.code}</td><td>${esc(c.dest.nom)}</td><td>${esc(zoneLabel(c))}</td><td>${badge(c.statut)}</td><td class="small muted">${dayLabel(pEndT(c))} · ${hm(pEndT(c))}</td></tr>`).join('')}</tbody></table></div>`
     :`<div class="empty">${ic('check',26)}Aucune livraison terminée pour le moment.</div>`}
  </div>`;
- $('#pNew').onclick=newColisModal;
  document.querySelectorAll('[data-pgo]').forEach(b=>b.onclick=()=>go(b.dataset.pgo));
  document.querySelectorAll('#view [data-c]').forEach(r=>r.onclick=()=>openColis(r.dataset.c));
 };
-
-/* ---------- Confirmation après création (partenaire) ---------- */
-function pCreatedModal(c){
- const u=trackUrl(c);const canWa=!!waDigits(c.dest.tel);
- openModal(`<div class="md-h"><div><h2>Colis enregistré</h2><p class="small muted" style="margin:2px 0 0">${esc(c.dest.nom)} · ${esc(zoneLabel(c))}</p></div><button type="button" class="x" id="mX" aria-label="Fermer">${ic('x')}</button></div>
- <div class="md-b stack" style="gap:14px">
-  <div class="box"><h3>Numéro de suivi</h3><div class="mono" id="pcCode" style="font-size:22px;font-weight:700;letter-spacing:.02em">${c.code}</div>
-   <p class="small" id="pcSync" style="margin:8px 0 0">${MODE==='supabase'?`${ic('clock',14)} Enregistrement en cours…`:`${ic('check',14)} Colis enregistré.`}</p></div>
-  <div class="box"><h3>Lien de suivi pour le client</h3>${u?`<input class="input mono" id="pcLink" readonly value="${esc(u)}" style="font-size:12.5px" aria-label="Lien de suivi">`:'<p class="small muted" style="margin:0">Lien indisponible pour ce colis.</p>'}</div>
-  <p class="small muted" style="margin:0">WhatsApp s'ouvre avec le message prérempli : c'est vous qui l'envoyez. L'envoi automatique n'est pas encore activé.</p>
- </div>
- <div class="md-f" style="flex-wrap:wrap;gap:8px">
-  <button class="btn" type="button" id="pcCopy" ${u?'':'disabled'}>Copier le lien</button>
-  <button class="btn" type="button" id="pcWa" ${u&&canWa?'':'disabled'}>${ic('chat',16)}Envoyer au destinataire</button>
-  <button class="btn" type="button" id="pcWaAny" ${u?'':'disabled'}>Partager sur WhatsApp</button>
-  <button class="btn" type="button" id="pcOpen">Voir le colis</button>
-  <button class="btn pri" type="button" id="pcNew">${ic('plus',16)}Nouveau colis</button>
- </div>`);
- $('#mX').onclick=closeAll;
- $('#pcCopy').onclick=()=>copyText(u,'Lien de suivi copié');
- $('#pcWa').onclick=()=>window.open(waUrl(c,true),'_blank','noopener');
- $('#pcWaAny').onclick=()=>window.open(waUrl(c,false),'_blank','noopener');
- $('#pcOpen').onclick=()=>{closeAll();openColis(c.code)};
- $('#pcNew').onclick=()=>{closeAll();newColisModal()};
- if(MODE==='supabase'&&c._sync)c._sync.then(()=>{const el=document.getElementById('pcSync');if(!el)return;
-  if(c.dbId){el.innerHTML=`${ic('check',14)} Enregistré dans Supabase.`}
-  else{el.innerHTML=`${ic('alert',14)} <b>L'enregistrement a échoué</b> : ce colis n'a pas été créé. Réessayez ou contactez FAST EXPRESS.`;el.style.color='var(--bad)';
-   ['pcCopy','pcWa','pcWaAny','pcOpen'].forEach(id=>{const b=document.getElementById(id);if(b)b.disabled=true})}});
-}
 
 /* ---------- Suivi en direct : TOUS les colis du partenaire en cours de livraison, sans aucun lien ----------
    La liste vient des colis du partenaire connecté (relus dans Supabase à chaque actualisation, RLS).

@@ -58,8 +58,19 @@ class Q{
    if(w.includes('confirmation_code')){LOG.push({t,op:this.op,error:'colonne protégée'});return{data:null,error:{code:'42501',message:'permission denied for table parcels'}}}}
   const bad=badCols(t,[...used,...selCols]);if(bad.length){LOG.push({t,op:this.op,error:'colonne inconnue '+bad});return err('column '+t+'.'+bad[0]+' does not exist')}
   const match=r=>this.f.every(([c,o,v])=>o==='eq'?r[c]===v:o==='gt'?r[c]>v:v.includes(r[c]));
-  if(this.op==='select'){(window.__MOCKSEL=window.__MOCKSEL||[]).push({t,uid:uid||null});(window.__MOCKCOLS=window.__MOCKCOLS||[]).push({t,cols:String(this.cols||'*')});let rows=DB[t].filter(match);if(this.ord){const [c,a]=this.ord;rows=rows.slice().sort((x,y)=>(x[c]>y[c]?1:x[c]<y[c]?-1:0)*(a?1:-1))}if(this.lim)rows=rows.slice(0,this.lim);rows=rows.map(r=>Object.fromEntries(selCols.map(c=>[c,r[c]??null])));
+  const rlsVisible=r=>!(t==='parcels'&&prof&&prof.role==='partner')||DB.partners.some(x=>x.id===r.partner_id&&x.profile_id===uid);
+  if(this.op==='select'){(window.__MOCKSEL=window.__MOCKSEL||[]).push({t,uid:uid||null});(window.__MOCKCOLS=window.__MOCKCOLS||[]).push({t,cols:String(this.cols||'*')});let rows=DB[t].filter(match).filter(rlsVisible);if(this.ord){const [c,a]=this.ord;rows=rows.slice().sort((x,y)=>(x[c]>y[c]?1:x[c]<y[c]?-1:0)*(a?1:-1))}if(this.lim)rows=rows.slice(0,this.lim);rows=rows.map(r=>Object.fromEntries(selCols.map(c=>[c,r[c]??null])));
    if(this.one)return{data:rows[0]||null,error:this.one==='single'&&!rows[0]?{message:'no rows'}:null};return{data:rows,error:null}}
+  /* RLS simulée = état APRÈS supabase/08 (proposition non exécutée) :
+     driver_locations : un livreur actif insère uniquement pour SA fiche drivers ; personne d'autre.
+       __LOC_POLICY='broken' reproduit une règle qui compare driver_id à auth.uid() (cause probable du refus réel).
+     parcels : création réservée au manager actif (__PARCEL_INSERT_OPEN=true reproduit une base sans cette règle). */
+  if(this.op==='insert'&&t==='driver_locations'){const rlsErr={data:null,error:{code:'42501',message:'new row violates row-level security policy for table "driver_locations"'}};
+   const own=prof&&prof.role==='driver'&&prof.is_active!==false?DB.drivers.filter(d=>d.profile_id===uid).map(d=>d.id):[];
+   const okRow=r=>window.__LOC_POLICY==='broken'?r.driver_id===uid:own.includes(r.driver_id);
+   if(!this.rows.every(okRow)){LOG.push({t,op:'insert',rls:true,rows:this.rows.map(r=>r.driver_id)});return rlsErr}}
+  if(this.op==='insert'&&t==='parcels'&&!window.__PARCEL_INSERT_OPEN&&!(prof&&prof.role==='manager'&&prof.is_active!==false)){
+   LOG.push({t,op:'insert',rls:true});return{data:null,error:{code:'42501',message:'new row violates row-level security policy for table "parcels"'}}}
   if(this.op==='insert'&&window.__FAIL_INSERT&&t==='parcels'){LOG.push({t,op:'insert',error:'panne simulée'});return err('simulated failure')}
   if(this.op==='insert'){window.__REQ=(window.__REQ||[]);window.__REQ.push({t,n:this.rows.length});const out=[];for(const r of this.rows){const b=badCols(t,Object.keys(r));if(b.length){LOG.push({t,op:'insert',error:'colonne inconnue '+b});return err('column "'+b[0]+'" of relation "'+t+'" does not exist')}
     if((t==='parcels'||t==='parcel_events')&&r.status&&!STATUSES.includes(r.status)){LOG.push({t,op:'insert',error:'statut '+r.status});return err('violates check constraint status')}
