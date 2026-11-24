@@ -529,6 +529,7 @@
     pas_de_compte: "Cette fiche n'a pas de compte de connexion.", compte_introuvable: 'Compte introuvable.',
     livreur_introuvable: 'Livreur introuvable.', partenaire_introuvable: 'Entreprise introuvable.',
     configuration_serveur: 'La fonction serveur est mal configurée.',
+    erreur_serveur: 'Erreur interne de la fonction serveur.',
     identifiants_invalides: 'E-mail ou mot de passe incorrect.',
     trop_de_tentatives: "Trop d'essais avec ce mot de passe provisoire : demandez-en un nouveau à FAST EXPRESS.",
     compte_desactive: 'Ce compte est désactivé. Contactez FAST EXPRESS.',
@@ -544,7 +545,13 @@
       try { body = error.context && typeof error.context.json === 'function' ? await error.context.json() : null; } catch (e) { body = null; }
       if (!body) throw new Error('Fonction serveur injoignable : ' + (error.message || 'erreur inconnue'));
     }
-    if (!body || body.ok !== true) { const c = body && body.error; const e = new Error(ADMIN_ERR[c] || 'Action refusée par le serveur (' + (c || 'réponse inattendue') + ').'); e.code = c; throw e; }
+    if (!body || body.ok !== true) {
+      const c = body && body.error;
+      // erreurs serveur (500) : la fonction indique l'étape en échec et un identifiant à chercher dans ses journaux
+      const step = body && typeof body.step === 'string' ? body.step : null, rid = body && typeof body.rid === 'string' ? body.rid : null;
+      const e = new Error((ADMIN_ERR[c] || 'Action refusée par le serveur (' + (c || 'réponse inattendue') + ').') + (step ? ' [étape : ' + step + (rid ? ', réf. ' + rid : '') + ']' : ''));
+      e.code = c; e.step = step; e.rid = rid; throw e;
+    }
     return body;
   }
   /* Première connexion (SANS session) : le mot de passe provisoire n'ouvre jamais de session ;

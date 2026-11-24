@@ -1,6 +1,6 @@
 # Gestion des utilisateurs — mise en service (étape 09)
 
-Rien n'est déployé ni exécuté. Ordre conseillé :
+Ordre conseillé :
 
 1. **Vérifications** : lancer `09_gestion_utilisateurs.sql`, section 09.0 (lecture seule).
 2. **Déployer la fonction serveur** `supabase/functions/admin-users/index.ts` :
@@ -49,3 +49,20 @@ Rien n'est déployé ni exécuté. Ordre conseillé :
 
 Refus systématiques : appelant non manager ou désactivé ; compte cible manager ; livreur qui
 transporte encore des colis (désactivation) ; entreprise ayant déjà un compte.
+
+## Diagnostic d'une erreur 500 (`erreur_serveur`)
+La réponse d'erreur serveur contient `step` (étape en échec) et `rid` (référence). Le message
+affiché dans le site se termine par `[étape : …, réf. …]`. Détail dans Supabase :
+**Edge Functions › admin-users › Logs**, chercher la référence `rid`.
+Les journaux ne contiennent jamais de clé, jeton, mot de passe, e-mail ni téléphone.
+
+| Étape | Signification probable |
+|---|---|
+| `configuration` | `SUPABASE_URL` ou `SUPABASE_SERVICE_ROLE_KEY` absent (voir la ligne `demarrage` : `key`) |
+| `manager.lecture_profil` | lecture de `profiles` refusée : la clé n'est pas une clé service_role valide |
+| `list.lecture_profiles` | même cause, ou colonne `role` illisible |
+| `list.listUsers` / `first_login.listUsers` | l'API Auth refuse la liste des comptes : clé non admin, ou compte `auth.users` créé à la main par SQL avec des champs vides (« Database error finding users ») |
+| `exception_inattendue` | erreur imprévue : lire `cause.name` et `cause.message` |
+
+La ligne `demarrage` indique la nature de la clé (jamais sa valeur) : `jwt:service_role` attendu ;
+`jwt:anon`, `sb_publishable` ou `absente` = mauvaise configuration.

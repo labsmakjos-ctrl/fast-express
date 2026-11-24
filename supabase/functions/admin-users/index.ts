@@ -1,5 +1,5 @@
 // =====================================================================
-// FAST EXPRESS — Edge Function « admin-users » (PROPOSITION NON DÉPLOYÉE)
+// FAST EXPRESS — Edge Function « admin-users »
 // Gestion des comptes livreurs et partenaires par un MANAGER ACTIF.
 //
 // Sécurité :
@@ -41,6 +41,38 @@ const ORIGINS = (Deno.env.get('FE_ALLOWED_ORIGINS') ?? 'https://labsmakjos-ctrl.
 
 const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
 
+/* ---------- Journal de diagnostic (Edge Functions › admin-users › Logs) ----------
+   Ne journalise JAMAIS : clé, jeton, mot de passe, e-mail, téléphone, corps de la requête.
+   Seulement : identifiant de requête, action, étape, code renvoyé, et le message d'erreur
+   Supabase nettoyé (jetons, clés, e-mails et numéros masqués). */
+const scrub = (v: unknown): string => String(v ?? '')
+  .replace(/eyJ[\w-]+\.[\w-]+\.[\w-]*/g, '[jeton]')
+  .replace(/sb_(secret|publishable)_[\w-]+/gi, '[cle]')
+  .replace(/bearer\s+\S+/gi, 'Bearer [jeton]')
+  .replace(/[^\s@"'<>(),;:]+@[^\s@"'<>(),;:]+/g, '[email]')
+  .replace(/\+?\d[\d .-]{6,}\d/g, '[nombre]')
+  .slice(0, 300);
+type ErrLike = { name?: unknown; code?: unknown; status?: unknown; message?: unknown };
+const cause = (e: unknown) => {
+  if (e == null) return null;
+  const x = (typeof e === 'object' ? e : { message: e }) as ErrLike;
+  return { name: scrub(x.name) || null, code: scrub(x.code) || null,
+    status: typeof x.status === 'number' ? x.status : null, message: scrub(x.message) || null };
+};
+// Nature de la clé (jamais sa valeur) : 'jwt:service_role', 'jwt:anon', 'sb_secret', 'absente'…
+function keyKind(k: string): string {
+  if (!k) return 'absente';
+  if (k.startsWith('sb_secret_')) return 'sb_secret';
+  if (k.startsWith('sb_publishable_')) return 'sb_publishable';
+  if (k.startsWith('eyJ')) {
+    try { return 'jwt:' + String(JSON.parse(atob(k.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).role ?? '?'); }
+    catch { return 'jwt:illisible'; }
+  }
+  return 'autre';
+}
+const CONFIG_INFO = { url: !!SUPABASE_URL, key: keyKind(SERVICE_KEY), origins: ORIGINS.length };
+console.log(JSON.stringify({ fn: 'admin-users', event: 'demarrage', config: CONFIG_INFO }));
+
 /* ---------- Réponses ---------- */
 function cors(req: Request): Record<string, string> {
   const o = req.headers.get('origin') ?? '';
@@ -51,8 +83,11 @@ function cors(req: Request): Record<string, string> {
     'Vary': 'Origin',
   };
 }
-class Refus extends Error { constructor(public code: string, public status = 400) { super(code); } }
-const fail = (code: string, status = 400): never => { throw new Refus(code, status); };
+class Refus extends Error {
+  constructor(public code: string, public status = 400, public step = '', public err: unknown = null) { super(code); }
+}
+// step : nom de l'étape qui échoue ; err : erreur Supabase d'origine (journalisée nettoyée)
+const fail = (code: string, status = 400, step = '', err: unknown = null): never => { throw new Refus(code, status, step, err); };
 
 /* ---------- Validation des champs ---------- */
 const txt = (v: unknown, min: number, max: number, code: string): string => {
@@ -126,7 +161,7 @@ const strong = (p: string) => p.length >= 10 && p.length <= 72 && /[A-Za-z]/.tes
 async function findByEmail(mail: string) {
   for (let page = 1; page <= 20; page++) {
     const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 1000 });
-    if (error) fail('erreur_serveur', 500);
+    if (error) fail('erreur_serveur', 500, 'first_login.listUsers', error);
     const u = data.users.find((x: { email?: string }) => (x.email ?? '').toLowerCase() === mail);
     if (u) return u;
     if (data.users.length < 1000) break;
@@ -138,13 +173,15 @@ async function findByEmail(mail: string) {
 async function requireManager(req: Request): Promise<string> {
   const h = req.headers.get('authorization') ?? '';
   const jwt = h.toLowerCase().startsWith('bearer ') ? h.slice(7).trim() : '';
-  if (!jwt) fail('non_connecte', 401);
+  if (!jwt) fail('non_connecte', 401, 'manager.jeton_absent');
   const { data, error } = await admin.auth.getUser(jwt);
-  if (error || !data?.user) fail('non_connecte', 401);
-  const { data: p, error: e2 } = await admin.from('profiles').select('role,is_active').eq('id', data.user.id).maybeSingle();
-  if (e2) fail('erreur_serveur', 500);
-  if (!p || p.role !== 'manager' || p.is_active !== true) fail('reserve_au_manager', 403);
-  return data.user.id;
+  if (error || !data?.user) fail('non_connecte', 401, 'manager.verif_jeton', error);
+  const uid = data.user!.id;
+  const { data: p, error: e2 } = await admin.from('profiles').select('role,is_active').eq('id', uid).maybeSingle();
+  if (e2) fail('erreur_serveur', 500, 'manager.lecture_profil', e2);
+  if (!p) fail('reserve_au_manager', 403, 'manager.profil_absent');
+  if (p!.role !== 'manager' || p!.is_active !== true) fail('reserve_au_manager', 403, 'manager.pas_manager_actif');
+  return uid;
 }
 
 /* ---------- Création du compte de connexion + profil (avec annulation si une étape échoue) ---------- */
@@ -156,15 +193,15 @@ async function createLogin(mail: string, fullName: string, tel: string, role: 'd
     app_metadata: pend.app_metadata, user_metadata: { full_name: fullName },
   });
   if (error || !data?.user) {
-    if (/already|registered|exists/i.test(error?.message ?? '')) fail('email_deja_utilise', 409);
-    fail('creation_compte_impossible', 500);
+    if (/already|registered|exists/i.test(error?.message ?? '')) fail('email_deja_utilise', 409, 'creation.createUser', error);
+    fail('creation_compte_impossible', 500, 'creation.createUser', error);
   }
   const uid = data!.user!.id;
   // bloqué jusqu'à la première connexion (mot de passe provisoire remplacé)
   const { error: eban } = await admin.auth.admin.updateUserById(uid, { ban_duration: BAN });
-  if (eban) { await admin.auth.admin.deleteUser(uid); fail('creation_compte_impossible', 500); }
+  if (eban) { await admin.auth.admin.deleteUser(uid); fail('creation_compte_impossible', 500, 'creation.ban', eban); }
   const { error: ep } = await admin.from('profiles').insert({ id: uid, full_name: fullName, phone: tel, role, is_active: true });
-  if (ep) { await admin.auth.admin.deleteUser(uid); fail('creation_profil_impossible', 500); }
+  if (ep) { await admin.auth.admin.deleteUser(uid); fail('creation_profil_impossible', 500, 'creation.insert_profil', ep); }
   return { uid, password };
 }
 async function undoLogin(uid: string) {
@@ -175,27 +212,27 @@ async function undoLogin(uid: string) {
 /* Profil d'un compte géré : uniquement livreur ou partenaire, jamais manager */
 async function managedProfile(pid: string, role: 'driver' | 'partner') {
   const { data, error } = await admin.from('profiles').select('id,role,is_active').eq('id', pid).maybeSingle();
-  if (error) fail('erreur_serveur', 500);
+  if (error) fail('erreur_serveur', 500, 'lecture_profil_cible', error);
   if (!data) fail('compte_introuvable', 404);
   if (data!.role !== role) fail('role_incompatible', 403);
   return data!;
 }
 async function driverRow(id: string) {
   const { data, error } = await admin.from('drivers').select('id,profile_id').eq('id', id).maybeSingle();
-  if (error) fail('erreur_serveur', 500);
+  if (error) fail('erreur_serveur', 500, 'lecture_drivers', error);
   if (!data || !data.profile_id) fail('livreur_introuvable', 404);
   return data!;
 }
 async function partnerRow(id: string) {
   const { data, error } = await admin.from('partners').select('id,profile_id').eq('id', id).maybeSingle();
-  if (error) fail('erreur_serveur', 500);
+  if (error) fail('erreur_serveur', 500, 'lecture_partners', error);
   if (!data) fail('partenaire_introuvable', 404);
   return data!;
 }
 async function setEmail(pid: string, mail: string | null) {
   if (!mail) return;
   const { error } = await admin.auth.admin.updateUserById(pid, { email: mail, email_confirm: true });
-  if (error) fail(/already|registered|exists/i.test(error.message) ? 'email_deja_utilise' : 'modification_email_impossible', 409);
+  if (error) fail(/already|registered|exists/i.test(error.message) ? 'email_deja_utilise' : 'modification_email_impossible', 409, 'modif_email', error);
 }
 
 /* ---------- Actions ---------- */
@@ -204,13 +241,14 @@ const ACTIONS: Record<string, (b: Body) => Promise<unknown>> = {
 
   async list() {
     const { data: profs, error } = await admin.from('profiles').select('id').in('role', ['driver', 'partner']);
-    if (error) fail('erreur_serveur', 500);
+    if (error) fail('erreur_serveur', 500, 'list.lecture_profiles', error);
     const ids = new Set((profs ?? []).map((p: { id: string }) => p.id));
     const out: unknown[] = [];
     for (let page = 1; page <= 20; page++) {
       const { data, error: e } = await admin.auth.admin.listUsers({ page, perPage: 1000 });
-      if (e) fail('erreur_serveur', 500);
-      for (const u of data.users) {
+      if (e) fail('erreur_serveur', 500, 'list.listUsers', e);
+      if (!Array.isArray(data?.users)) fail('erreur_serveur', 500, 'list.listUsers_reponse_vide');
+      for (const u of data.users as Array<(typeof data.users)[number] & { banned_until?: string | null }>) {
         if (!ids.has(u.id)) continue;
         out.push({ id: u.id, email: u.email ?? null, last_sign_in_at: u.last_sign_in_at ?? null,
           blocked: !!(u.banned_until && Date.parse(u.banned_until) > Date.now()),
@@ -230,7 +268,7 @@ const ACTIONS: Record<string, (b: Body) => Promise<unknown>> = {
     const { uid, password } = await createLogin(mail, fullName, tel, 'driver');
     const { data, error } = await admin.from('drivers')
       .insert({ profile_id: uid, vehicle_type: vehicle, vehicle_plate: plate, zone, is_on_duty: false }).select('id').single();
-    if (error || !data) { await undoLogin(uid); fail('creation_fiche_livreur_impossible', 500); }
+    if (error || !data) { await undoLogin(uid); fail('creation_fiche_livreur_impossible', 500, 'create_driver.insert_drivers', error); }
     return { profile_id: uid, driver_id: data!.id, email: mail, temp_password: password };
   },
 
@@ -241,7 +279,7 @@ const ACTIONS: Record<string, (b: Body) => Promise<unknown>> = {
     const { data, error } = await admin.from('partners')
       // partners.contact_email est NOT NULL sans valeur par défaut (09.0 b) : e-mail du responsable
       .insert({ company_name: company, contact_name: contact, contact_phone: tel, contact_email: mail, profile_id: uid }).select('id').single();
-    if (error || !data) { await undoLogin(uid); fail('creation_fiche_partenaire_impossible', 500); }
+    if (error || !data) { await undoLogin(uid); fail('creation_fiche_partenaire_impossible', 500, 'create_partner.insert_partners', error); }
     return { profile_id: uid, partner_id: data!.id, email: mail, temp_password: password };
   },
 
@@ -256,7 +294,7 @@ const ACTIONS: Record<string, (b: Body) => Promise<unknown>> = {
     const { uid, password } = await createLogin(mail, contact, tel, 'partner');
     const { data, error } = await admin.from('partners').update({ profile_id: uid, contact_name: contact, contact_phone: tel })
       .eq('id', pid).is('profile_id', null).select('id');
-    if (error || !data || data.length !== 1) { await undoLogin(uid); fail('association_impossible', 409); }
+    if (error || !data || data.length !== 1) { await undoLogin(uid); fail('association_impossible', 409, 'create_partner_login.update_partners', error); }
     return { profile_id: uid, partner_id: pid, email: mail, temp_password: password };
   },
 
@@ -270,7 +308,7 @@ const ACTIONS: Record<string, (b: Body) => Promise<unknown>> = {
     await setEmail(d.profile_id, mail);
     const e1 = (await admin.from('profiles').update({ full_name: fullName, phone: tel }).eq('id', d.profile_id)).error;
     const e2 = (await admin.from('drivers').update(row).eq('id', d.id)).error;
-    if (e1 || e2) fail('modification_impossible', 500);
+    if (e1 || e2) fail('modification_impossible', 500, e1 ? 'update_driver.profiles' : 'update_driver.drivers', e1 ?? e2);
     return { ok: true };
   },
 
@@ -283,10 +321,10 @@ const ACTIONS: Record<string, (b: Body) => Promise<unknown>> = {
       await managedProfile(p.profile_id, 'partner');
       await setEmail(p.profile_id, mail);
       const e1 = (await admin.from('profiles').update({ full_name: row.contact_name, phone: row.contact_phone }).eq('id', p.profile_id)).error;
-      if (e1) fail('modification_impossible', 500);
+      if (e1) fail('modification_impossible', 500, 'update_partner.profiles', e1);
     }
     const e2 = (await admin.from('partners').update(row).eq('id', p.id)).error;
-    if (e2) fail('modification_impossible', 500);
+    if (e2) fail('modification_impossible', 500, 'update_partner.partners', e2);
     return { ok: true };
   },
 
@@ -301,19 +339,19 @@ const ACTIONS: Record<string, (b: Body) => Promise<unknown>> = {
       // un livreur qui transporte encore des colis ne peut pas être désactivé : réaffecter d'abord
       const { count, error } = await admin.from('parcels').select('id', { count: 'exact', head: true })
         .eq('driver_id', id).in('status', ['pending', 'picked_up', 'in_transit']);
-      if (error) fail('erreur_serveur', 500);
+      if (error) fail('erreur_serveur', 500, 'set_active.lecture_parcels', error);
       if ((count ?? 0) > 0) fail('livreur_a_des_colis', 409);
       await admin.from('drivers').update({ is_on_duty: false }).eq('id', id);
     }
     const { error } = await admin.from('profiles').update({ is_active: active }).eq('id', row.profile_id);
-    if (error) fail('modification_impossible', 500);
+    if (error) fail('modification_impossible', 500, 'set_active.profiles', error);
     // réactivation : un compte qui n'a pas encore remplacé son mot de passe provisoire reste bloqué
     const { data: au } = await admin.auth.admin.getUserById(row.profile_id);
     const pending = au?.user?.app_metadata?.fe_pending === true;
     const { error: eb } = await admin.auth.admin.updateUserById(row.profile_id, { ban_duration: active && !pending ? 'none' : BAN });
     if (eb) {   // profil et blocage doivent rester cohérents
       await admin.from('profiles').update({ is_active: !active }).eq('id', row.profile_id);
-      fail('blocage_connexion_impossible', 500);
+      fail('blocage_connexion_impossible', 500, 'set_active.ban', eb);
     }
     return { ok: true, active };
   },
@@ -327,7 +365,7 @@ const ACTIONS: Record<string, (b: Body) => Promise<unknown>> = {
     const password = tempPassword();
     // l'ancien mot de passe cesse de fonctionner, les sessions ouvertes ne peuvent plus être prolongées
     const { error } = await admin.auth.admin.updateUserById(row.profile_id, await pendingAttrs(password));
-    if (error) fail('reinitialisation_impossible', 500);
+    if (error) fail('reinitialisation_impossible', 500, 'reset_password.updateUser', error);
     return { temp_password: password };
   },
 
@@ -358,7 +396,7 @@ const ACTIONS: Record<string, (b: Body) => Promise<unknown>> = {
       password: np, ban_duration: 'none',
       app_metadata: { fe_pending: false, fe_temp: null, fe_attempts: 0 },
     });
-    if (error) fail(/weak|short|least|pwned|leaked/i.test(error.message) ? 'mot_de_passe_faible' : 'changement_impossible', 400);
+    if (error) fail(/weak|short|least|pwned|leaked/i.test(error.message) ? 'mot_de_passe_faible' : 'changement_impossible', 400, 'first_login.updateUser', error);
     return { done: true };
   },
 };
@@ -367,19 +405,28 @@ Deno.serve(async (req) => {
   const h = { ...cors(req), 'Content-Type': 'application/json' };
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors(req) });
   if (req.method !== 'POST') return new Response(JSON.stringify({ error: 'methode_interdite' }), { status: 405, headers: h });
+  const rid = crypto.randomUUID().slice(0, 8);   // identifiant de requête (pour retrouver la ligne de journal)
+  let action = '';
   try {
-    if (!SUPABASE_URL || !SERVICE_KEY) fail('configuration_serveur', 500);
+    if (!SUPABASE_URL || !SERVICE_KEY) fail('configuration_serveur', 500, 'configuration');
     const body = (await req.json().catch(() => ({}))) as Body;
-    const action = String(body.action ?? '');
+    action = String(body.action ?? '').slice(0, 40);
     if (action !== 'first_login') await requireManager(req);   // seule la première connexion est publique
     const fn = ACTIONS[action];
     if (!fn) fail('action_inconnue');
     const out = await fn(body);
     return new Response(JSON.stringify({ ok: true, ...(out as object) }), { status: 200, headers: h });
   } catch (e) {
-    const code = e instanceof Refus ? e.code : 'erreur_serveur';
-    const status = e instanceof Refus ? e.status : 500;
-    if (!(e instanceof Refus)) console.error(e);
-    return new Response(JSON.stringify({ ok: false, error: code }), { status, headers: h });
+    const refus = e instanceof Refus;
+    const code = refus ? e.code : 'erreur_serveur';
+    const status = refus ? e.status : 500;
+    const step = refus ? (e.step || 'non_precisee') : 'exception_inattendue';
+    const log = { fn: 'admin-users', rid, action: /^[a-z_]+$/.test(action) ? action : '?', step, code, status,
+      cause: cause(refus ? e.err : e), ...(code === 'configuration_serveur' ? { config: CONFIG_INFO } : {}) };
+    if (status >= 500) console.error(JSON.stringify(log)); else console.warn(JSON.stringify(log));
+    // Le navigateur reçoit l'étape (jamais le message détaillé) uniquement pour les erreurs serveur,
+    // ce qui ne révèle rien sur l'existence d'un compte.
+    const out = status >= 500 ? { ok: false, error: code, step, rid } : { ok: false, error: code };
+    return new Response(JSON.stringify(out), { status, headers: h });
   }
 });
